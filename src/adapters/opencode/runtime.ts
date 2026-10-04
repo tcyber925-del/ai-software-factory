@@ -5,7 +5,7 @@ import type { AgentRef, RuntimeEvidence, RuntimeFailure, RuntimeHealth, WorkUnit
 import type { CommandRunner } from "./process.js";
 import { defaultCommandRunner } from "./process.js";
 
-interface OpenCodeAgentState { workspace: WorkspaceRef; worker: Worker; status: "created" | "running" | "idle" | "exited"; failure?: RuntimeFailure; events: RuntimeEvidence["events"]; }
+interface OpenCodeAgentState { workUnitId: string; workspace: WorkspaceRef; worker: Worker; status: "created" | "running" | "idle" | "exited"; failure?: RuntimeFailure; events: RuntimeEvidence["events"]; }
 export interface OpenCodeRuntimeOptions { command?: string; workspaceRoot?: string; repositoryRoot?: string; runner?: CommandRunner; }
 
 export class OpenCodeRuntime implements WorkerRuntime {
@@ -13,7 +13,7 @@ export class OpenCodeRuntime implements WorkerRuntime {
   readonly #workspaces = new Map<string, WorkspaceRef>(); readonly #agents = new Map<string, OpenCodeAgentState>();
   constructor(options: OpenCodeRuntimeOptions = {}) { this.#command = options.command ?? "opencode"; this.#workspaceRoot = options.workspaceRoot ?? join(".factory", "workspaces"); this.#repositoryRoot = options.repositoryRoot ?? process.cwd(); this.#runner = options.runner ?? defaultCommandRunner; }
   async capabilities(): Promise<string[]> { return ["coding", "frontend", "backend", "testing", "review"]; }
-  async health(): Promise<RuntimeHealth> { try { await this.#runner.run(this.#command, ["--version"], process.cwd()); return { available: true, runtime: "opencode" }; } catch { return { available: false, runtime: "opencode" }; } }
+  async health(): Promise<RuntimeHealth> { try { await this.#runner.run(this.#command, ["--version"], this.#repositoryRoot); return { available: true, runtime: "opencode" }; } catch { return { available: false, runtime: "opencode" }; } }
   async createWorkspace(_workUnit: WorkUnit): Promise<WorkspaceRef> { const id = `opencode-ws-${randomUUID()}`; const path = join(this.#workspaceRoot, id); await mkdir(path, { recursive: true }); const workspace = { id, path }; this.#workspaces.set(id, workspace); return workspace; }
   async createWorktree(workspace: WorkspaceRef, baseRevision?: string): Promise<WorkspaceRef> {
     const worktreePath = join(workspace.path, "worktree"); await mkdir(dirname(worktreePath), { recursive: true });
@@ -21,7 +21,7 @@ export class OpenCodeRuntime implements WorkerRuntime {
     try { await this.#runner.run("git", args, this.#repositoryRoot); } catch (error) { throw this.#runtimeError("workspace_failed", error); }
     const updated = { ...workspace, worktreePath }; this.#workspaces.set(workspace.id, updated); return updated;
   }
-  async startAgent(workspace: WorkspaceRef, worker: Worker): Promise<AgentRef> { if (!workspace.worktreePath) throw new Error("OpenCode runtime requires a worktree before starting an agent"); const id = `opencode-agent-${randomUUID()}`; this.#agents.set(id, { workspace, worker, status: "created", events: [] }); return { id, runtimeId: id }; }
+  async startAgent(workspace: WorkspaceRef, worker: Worker): Promise<AgentRef> { if (!workspace.worktreePath) throw new Error("OpenCode runtime requires a worktree before starting an agent"); const id = `opencode-agent-${randomUUID()}`; this.#agents.set(id, { workUnitId: this.#workspaces.get(workspace.id)?.id ?? "unknown", workspace, worker, status: "created", events: [] }); return { id, runtimeId: id }; }
   async promptAgent(agent: AgentRef, prompt: string): Promise<void> {
     if (!prompt.trim()) throw new Error("prompt must not be empty"); const state = this.#agents.get(agent.id); if (!state) throw new Error("unknown OpenCode agent");
     state.status = "running"; state.events.push(this.#event(agent, "prompt.started", { prompt }));
@@ -32,7 +32,7 @@ export class OpenCodeRuntime implements WorkerRuntime {
   async inspectAgent(agent: AgentRef): Promise<{ status: string; failure?: RuntimeFailure }> { const state = this.#agents.get(agent.id); if (!state) throw new Error("unknown OpenCode agent"); return { status: state.status, failure: state.failure }; }
   async collectRuntimeEvidence(agent: AgentRef): Promise<RuntimeEvidence> { const state = this.#agents.get(agent.id); if (!state) throw new Error("unknown OpenCode agent"); return { runtime: "opencode", workspaceId: state.workspace.id, agentId: agent.id, events: [...state.events] }; }
   async cleanupWorkspace(workspace: WorkspaceRef): Promise<void> { if (workspace.worktreePath) { try { await this.#runner.run("git", ["worktree", "remove", "--force", workspace.worktreePath], this.#repositoryRoot); } catch (error) { throw this.#runtimeError("cleanup_failed", error); } } await rm(workspace.path, { recursive: true, force: true }); this.#workspaces.delete(workspace.id); }
-  #event(agent: AgentRef, type: string, payload?: Record<string, unknown>) { return { id: randomUUID(), workUnitId: "runtime-local", type, timestamp: new Date().toISOString(), payload: { agentId: agent.id, ...payload } }; }
+  #event(agent: AgentRef, type: string, payload?: Record<string, unknown>) { return { id: randomUUID(), workUnitId: this.#agents.get(agent.id)?.workUnitId ?? "unknown", type, timestamp: new Date().toISOString(), payload: { agentId: agent.id, ...payload } }; }
   #mapFailure(error: unknown): RuntimeFailure { const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase(); if (message.includes("enoent") || message.includes("not found")) return "unavailable"; if (message.includes("timed out") || message.includes("timeout")) return "timeout"; if (message.includes("permission")) return "blocked"; if (message.includes("worktree")) return "workspace_failed"; return "agent_exited"; }
   #runtimeError(failure: RuntimeFailure, error: unknown): Error { const message = error instanceof Error ? error.message : String(error); return new Error(`OpenCode runtime [${failure}]: ${message}`); }
 }
