@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON schemas
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir = 'schemas';
+          const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+          if (files.length < 5) throw new Error('Expected protocol schemas are missing');
+          for (const file of files) {
+            const data = JSON.parse(fs.readFileSync(dir + '/' + file, 'utf8'));
+            if (!data.$schema || !data.title || data.type !== 'object') {
+              throw new Error('Invalid schema contract: ' + file);
+            }
+          }
+          console.log('Validated', files.length, 'schemas');
+          NODE
+      - name: Validate required documentation
+        run: |
+          test -f AGENTS.md
+          test -f README.md
+          test -f docs/architecture.md
+          test -f docs/protocols.md
+          test -f docs/schemas.md
+          test -f docs/runtime-adapters.md
+          test -f docs/security.md
