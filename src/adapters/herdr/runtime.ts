@@ -209,11 +209,12 @@ export class HerdrRuntime implements WorkerRuntime {
       if (status === "blocked") state.status = "blocked";
       else if (status === "done" || status === "idle") state.status = "idle";
       return state.status === "blocked" ? "exited" : state.status;
+    } catch (error) {
       const failure = this.#mapFailure(error);
       state.failure = failure;
       if (failure === "timeout") return "running";
       state.status = failure === "blocked" ? "blocked" : "exited";
-      return state.status;
+      return state.status === "blocked" ? "exited" : state.status;
     }
   }
 
