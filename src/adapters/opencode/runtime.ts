@@ -29,7 +29,9 @@ export class OpenCodeRuntime implements WorkerRuntime {
     catch (error) { state.status = "exited"; state.failure = this.#mapFailure(error); state.events.push(this.#event(agent, "prompt.failed", { failure: state.failure })); throw this.#runtimeError(state.failure, error); }
   }
   async waitAgent(agent: AgentRef, _timeoutMs: number): Promise<"running" | "idle" | "exited"> { const state = this.#agents.get(agent.id); if (!state) throw new Error("unknown OpenCode agent"); return state.status === "created" ? "running" : state.status; }
-  async inspectAgent(agent: AgentRef): Promise<{ status: string; failure?: RuntimeFailure }> { const state = this.#agents.get(agent.id); if (!state) throw new Error("unknown OpenCode agent"); return { status: state.status, failure: state.failure }; }
+  async inspectAgent(agent: AgentRef): Promise<{ status: string; failure?: RuntimeFailure }> { const state = this.#agents.get(agent.id); if (!state) throw new Error("unknown OpenCode agent"); return state.failure === undefined
+      ? { status: state.status }
+      : { status: state.status, failure: state.failure }; }
   async collectRuntimeEvidence(agent: AgentRef): Promise<RuntimeEvidence> { const state = this.#agents.get(agent.id); if (!state) throw new Error("unknown OpenCode agent"); return { runtime: "opencode", workspaceId: state.workspace.id, agentId: agent.id, events: [...state.events] }; }
   async cleanupWorkspace(workspace: WorkspaceRef): Promise<void> { if (workspace.worktreePath) { try { await this.#runner.run("git", ["worktree", "remove", "--force", workspace.worktreePath], this.#repositoryRoot); } catch (error) { throw this.#runtimeError("cleanup_failed", error); } } await rm(workspace.path, { recursive: true, force: true }); this.#workspaces.delete(workspace.id); this.#workUnitIds.delete(workspace.id); }
   #event(agent: AgentRef, type: string, payload?: Record<string, unknown>) { return { id: randomUUID(), workUnitId: this.#agents.get(agent.id)?.workUnitId ?? "unknown", type, timestamp: new Date().toISOString(), payload: { agentId: agent.id, ...payload } }; }
