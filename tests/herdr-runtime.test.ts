@@ -57,7 +57,7 @@ describe("HerdrRuntime", () => {
 
   it("maps unavailable Herdr explicitly", async () => {
     const runtime = new HerdrRuntime({
-      commandRunner: runnerFor({}, {
+      commandRunner: runnerFor(() => ({}), {
         "status server": new Error("ENOENT: herdr not found"),
       }),
     });
