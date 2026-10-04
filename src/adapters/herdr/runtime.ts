@@ -208,7 +208,7 @@ export class HerdrRuntime implements WorkerRuntime {
       const status = response.result?.agent?.status;
       if (status === "blocked") state.status = "blocked";
       else if (status === "done" || status === "idle") state.status = "idle";
-      return state.status === "blocked" ? "exited" : state.status;
+      return state.status === "blocked" || state.status === "created" ? "running" : state.status;
     } catch (error) {
       const failure = this.#mapFailure(error);
       state.failure = failure;
