@@ -17,15 +17,12 @@ const worker: Worker = {
   runtime: "opencode",
 };
 
-function runnerFor(
-  responses: Record<string, unknown>,
-  errors: Record<string, Error> = {},
-): HerdrCommandRunner {
+function runnerFor(responses: (args: string[]) => unknown, errors: (args: string[]) => Error | undefined = () => undefined): HerdrCommandRunner {
   return {
     async run(args) {
-      const key = args.join(" ");
-      if (errors[key]) throw errors[key];
-      return { stdout: JSON.stringify(responses[key] ?? {}), stderr: "" };
+      const error = errors(args);
+      if (error) throw error;
+      return { stdout: JSON.stringify(responses(args)), stderr: "" };
     },
   };
 }
@@ -34,20 +31,17 @@ describe("HerdrRuntime", () => {
   it("runs the managed lifecycle without requiring Herdr", async () => {
     const runtime = new HerdrRuntime({
       repositoryRoot: "/repo",
-      commandRunner: runnerFor({
-        "workspace create --cwd /repo --label factory-wu-herdr-deadbeef --no-focus": {
-          result: { workspace: { workspace_id: "w1" }, root_pane: { pane_id: "p1" } },
-        },
-        "worktree create --workspace w1 --branch factory/wu-herdr --no-focus --base HEAD": {
-          result: { worktree: { path: "/repo/.worktree" } },
-        },
-        "workspace get w1": { result: { root_pane: { pane_id: "p1" } } },
-        "agent start herdr-agent-test --kind opencode --pane p1 --timeout 30000 -- opencode": {
-          result: { agent: { name: "herdr-agent-test", status: "idle" } },
-        },
-        "agent prompt herdr-agent-test implement --wait --timeout 120000": {
-          result: { agent: { name: "herdr-agent-test", status: "idle" } },
-        },
+      commandRunner: runnerFor((args) => {
+        if (args[0] === "workspace" && args[1] === "create") {
+          return { result: { workspace: { workspace_id: "w1" }, root_pane: { pane_id: "p1" } } };
+        }
+        if (args[0] === "worktree") return { result: { worktree: { path: "/repo/.worktree" } } };
+        if (args[0] === "workspace" && args[1] === "get") return { result: { root_pane: { pane_id: "p1" } } };
+        if (args[0] === "agent" && args[1] === "start") return { result: { agent: { name: args[2], status: "idle" } } };
+        if (args[0] === "agent" && args[1] === "prompt") return { result: { agent: { name: args[2], status: "idle" } } };
+        if (args[0] === "agent" && args[1] === "wait") return { result: { agent: { name: args[2], status: "idle" } } };
+        if (args[0] === "agent" && args[1] === "get") return { result: { agent: { name: args[2], status: "idle" } } };
+        return {};
       }),
     });
 
@@ -73,20 +67,14 @@ describe("HerdrRuntime", () => {
 
   it("does not turn runtime completion into verification success", async () => {
     const runtime = new HerdrRuntime({
-      commandRunner: runnerFor({
-        "workspace create --cwd /repo --label factory-wu-herdr-deadbeef --no-focus": {
-          result: { workspace: { workspace_id: "w1" }, root_pane: { pane_id: "p1" } },
-        },
-        "worktree create --workspace w1 --branch factory/wu-herdr --no-focus --base HEAD": {
-          result: { worktree: { path: "/repo/.worktree" } },
-        },
-        "workspace get w1": { result: { root_pane: { pane_id: "p1" } } },
-        "agent start herdr-agent-test --kind opencode --pane p1 --timeout 30000 -- opencode": {
-          result: { agent: { name: "herdr-agent-test", status: "idle" } },
-        },
-        "agent prompt herdr-agent-test implement --wait --timeout 120000": {
-          result: { agent: { name: "herdr-agent-test", status: "idle" } },
-        },
+      commandRunner: runnerFor((args) => {
+        if (args[0] === "workspace" && args[1] === "create") return { result: { workspace: { workspace_id: "w1" }, root_pane: { pane_id: "p1" } } };
+        if (args[0] === "worktree") return { result: { worktree: { path: "/repo/.worktree" } } };
+        if (args[0] === "workspace" && args[1] === "get") return { result: { root_pane: { pane_id: "p1" } } };
+        if (args[0] === "agent" && args[1] === "start") return { result: { agent: { name: args[2], status: "idle" } } };
+        if (args[0] === "agent" && args[1] === "prompt") return { result: { agent: { name: args[2], status: "idle" } } };
+        if (args[0] === "agent" && args[1] === "get") return { result: { agent: { name: args[2], status: "idle" } } };
+        return {};
       }),
     });
     const workspace = await runtime.createWorkspace(workUnit);
