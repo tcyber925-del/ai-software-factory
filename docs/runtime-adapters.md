@@ -39,3 +39,8 @@ Runtime failures must not erase factory state.
 
 ## Future runtimes
 Containers, remote sandboxes, Codex, Claude Code, and other runtimes can be added as adapters without changing Work Unit semantics.
+
+
+## Herdr adapter boundary
+
+Herdr exposes machine-readable automation for workspaces, Git worktrees, recognized agents, prompts, waits, and optional remote-machine routing. The factory adapter consumes these automation surfaces rather than Herdr UI state. Herdr runtime state is evidence about execution, not authority for verification or integration. Remote machine routing is intentionally deferred; when added, the target machine must be explicit and unavailable remote targets must fail rather than silently falling back to local execution.
