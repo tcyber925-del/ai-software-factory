@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import type {
   AgentRef,
   RuntimeEvidence,
@@ -209,7 +208,7 @@ export class HerdrRuntime implements WorkerRuntime {
       const status = response.result?.agent?.status;
       if (status === "blocked") state.status = "blocked";
       else if (status === "done" || status === "idle") state.status = "idle";
-      return state.status;
+      return state.status === "blocked" ? "exited" : state.status;
     } catch (error) {
       const failure = this.#mapFailure(error);
       state.failure = failure;
@@ -236,7 +235,9 @@ export class HerdrRuntime implements WorkerRuntime {
     } catch {
       // Preserve the last independently observed state if inspection is unavailable.
     }
-    return { status: state.status, failure: state.failure };
+    return state.failure === undefined
+      ? { status: state.status }
+      : { status: state.status, failure: state.failure };
   }
 
   async collectRuntimeEvidence(agent: AgentRef): Promise<RuntimeEvidence> {
