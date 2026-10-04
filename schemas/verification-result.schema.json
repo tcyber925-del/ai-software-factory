@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://ai-software-factory.dev/schemas/verification-result.schema.json",
+  "title":"Verification Result",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["work_unit_id","status","checks"],
+  "properties":{
+    "work_unit_id":{"type":"string","minLength":1},
+    "status":{"enum":["passed","failed","blocked"]},
+    "checks":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","status"],"properties":{"name":{"type":"string"},"status":{"enum":["passed","failed","skipped"]},"evidence":{"type":"string"}}}},
+    "attempt":{"type":"integer","minimum":1}
+  }
+}
