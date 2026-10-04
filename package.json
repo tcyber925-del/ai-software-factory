@@ -4,5 +4,5 @@
   "private":true,
   "type":"module",
   "scripts":{"build":"tsc --noEmit","test":"vitest run","verify":"npm run build && npm test"},
-  "devDependencies":{"typescript":"^5.9.3","vitest":"^3.2.4"}
+  "devDependencies":{"typescript":"^5.9.3","vitest":"^3.2.4","@types/node":"^22.15.0"}
 }
