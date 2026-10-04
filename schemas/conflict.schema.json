@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://ai-software-factory.dev/schemas/conflict.schema.json",
+  "title":"Conflict",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["id","work_units","reason"],
+  "properties":{
+    "id":{"type":"string","minLength":1},
+    "work_units":{"type":"array","items":{"type":"string","minLength":1},"minItems":2,"uniqueItems":true},
+    "reason":{"enum":["overlapping_paths","dependency","shared_contract","runtime_assumption","protected_resource","uncertain"]},
+    "details":{"type":"string"}
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://ai-software-factory.dev/schemas/work-unit.schema.json",
+  "title":"Work Unit",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["id","goal","repository","capabilities","acceptance_criteria"],
+  "properties":{
+    "id":{"type":"string","minLength":1},
+    "goal":{"type":"string","minLength":1},
+    "repository":{"type":"string","minLength":1},
+    "base_revision":{"type":"string"},
+    "capabilities":{"type":"array","items":{"type":"string","minLength":1},"minItems":1,"uniqueItems":true},
+    "scope":{"type":"array","items":{"type":"string"}},
+    "acceptance_criteria":{"type":"array","items":{"type":"string","minLength":1},"minItems":1},
+    "verification":{"type":"array","items":{"type":"string"}},
+    "autonomy":{"enum":["automatic","review","approval"]}
+  }
+}
