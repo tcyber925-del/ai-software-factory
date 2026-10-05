@@ -63,4 +63,14 @@ A verification record should identify:
 
 The GitHub Actions workflow at `.github/workflows/ci.yml` is the deterministic contract gate. It runs on pull requests and pushes to `main`.
 
+## Dependency installation
+
+CI installs dependencies with `npm ci` against the committed `package-lock.json`.
+
+The lockfile must be regenerated whenever `package.json` dependency metadata changes. `npm ci` fails by design when the two are out of sync; that failure is the intended signal and must be resolved by synchronizing the lockfile.
+
+Replacing `npm ci` with `npm install` to make CI pass is not an acceptable repair. It removes the reproducibility guarantee while leaving a green run, which is the specific condition this policy exists to prevent.
+
+The lockfile is part of the verification contract, so it is reviewed and changed like source: an unexplained dependency change is a scope finding.
+
 This policy intentionally does not introduce a scheduler, database, hosted control plane, or provider-specific runtime behavior.

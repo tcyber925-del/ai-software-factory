@@ -17,10 +17,18 @@ const worker: Worker = {
   runtime: "opencode",
 };
 
-function runnerFor(responses: (args: string[]) => unknown, errors: (args: string[]) => Error | undefined = () => undefined): HerdrCommandRunner {
+function herdrResponse(args: string[]): unknown {
+  if (args[0] === "workspace" && args[1] === "create") return { result: { workspace: { workspace_id: "w1" }, root_pane: { pane_id: "p1" } } };
+  if (args[0] === "worktree") return { result: { worktree: { path: "/repo/.worktree" } } };
+  if (args[0] === "workspace" && args[1] === "get") return { result: { root_pane: { pane_id: "p1" } } };
+  if (args[0] === "agent") return { result: { agent: { name: args[2], status: "idle" } } };
+  return {};
+}
+
+function runnerFor(responses: (args: string[]) => unknown, errors: Record<string, Error> = {}): HerdrCommandRunner {
   return {
     async run(args) {
-      const error = errors(args);
+      const error = errors[args.join(" ")];
       if (error) throw error;
       return { stdout: JSON.stringify(responses(args)), stderr: "" };
     },
@@ -53,6 +61,26 @@ describe("HerdrRuntime", () => {
     expect(await runtime.waitAgent(agent, 1000)).toBe("idle");
     expect((await runtime.inspectAgent(agent)).status).toBe("idle");
     expect((await runtime.collectRuntimeEvidence(agent)).runtime).toBe("herdr");
+  });
+
+  it("reports a blocked agent as exited through the protocol tri-state", async () => {
+    const runtime = new HerdrRuntime({
+      repositoryRoot: "/repo",
+      commandRunner: {
+        async run(args) {
+          if (args[0] === "agent" && args[1] === "wait") throw new Error("agent is blocked by policy");
+          return { stdout: JSON.stringify(herdrResponse(args)), stderr: "" };
+        },
+      },
+    });
+
+    const workspace = await runtime.createWorkspace(workUnit);
+    const worktree = await runtime.createWorktree(workspace, "HEAD");
+    const agent = await runtime.startAgent(worktree, worker);
+    await runtime.promptAgent(agent, "implement");
+
+    expect(await runtime.waitAgent(agent, 1000)).toBe("exited");
+    expect((await runtime.inspectAgent(agent)).failure).toBe("blocked");
   });
 
   it("maps unavailable Herdr explicitly", async () => {

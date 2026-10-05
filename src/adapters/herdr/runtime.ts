@@ -208,13 +208,13 @@ export class HerdrRuntime implements WorkerRuntime {
       const status = response.result?.agent?.status;
       if (status === "blocked") state.status = "blocked";
       else if (status === "done" || status === "idle") state.status = "idle";
-      return state.status === "blocked" ? "exited" : state.status;
+      return this.#protocolStatus(state.status);
     } catch (error) {
       const failure = this.#mapFailure(error);
       state.failure = failure;
       if (failure === "timeout") return "running";
       state.status = failure === "blocked" ? "blocked" : "exited";
-      return state.status;
+      return this.#protocolStatus(state.status);
     }
   }
 
@@ -303,6 +303,13 @@ export class HerdrRuntime implements WorkerRuntime {
       timestamp: new Date().toISOString(),
       payload: { agentId, ...payload },
     };
+  }
+
+  /** Maps internal agent status onto the protocol tri-state exposed by WorkerRuntime. */
+  #protocolStatus(status: HerdrAgentState["status"]): "running" | "idle" | "exited" {
+    if (status === "blocked") return "exited";
+    if (status === "created") return "running";
+    return status;
   }
 
   #mapFailure(error: unknown): RuntimeFailure {
