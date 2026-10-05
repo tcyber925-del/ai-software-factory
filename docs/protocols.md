@@ -57,6 +57,13 @@ Events form the append-only operational trace. Examples include:
 - integration.ready
 - integration.blocked
 
+## Repair
+A deterministic verification failure may trigger a bounded number of repair attempts. Repair is judged
+only by independent verification, never by the worker that performed it; the repair context restates
+the original goal, acceptance criteria and scope so an attempt cannot become a requirement change; and
+the attempt limit is enforced inside the loop. Reaching the limit escalates for human intervention.
+See `docs/repair.md`.
+
 ## Scheduling
 The scheduler decides ordering and grouping only. It exposes no field capable of expressing
 verification or integration state, so it structurally cannot mark work correct or bypass the
