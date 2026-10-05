@@ -47,3 +47,4 @@ jobs:
           test -f docs/execution.md
           test -f docs/provenance.md
           test -f docs/scheduling.md
+          test -f docs/repair.md

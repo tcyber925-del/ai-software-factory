@@ -27,5 +27,15 @@ export type {
   SchedulePlan,
   SchedulingDecision,
 } from "./kernel/scheduler.js";
+export {buildRepairContext, DEFAULT_MAX_REPAIR_ATTEMPTS, renderRepairPrompt, runRepairLoop} from "./kernel/repair.js";
+export type {
+  RepairAttempt,
+  RepairAttemptOutcome,
+  RepairContext,
+  RepairLoopResult,
+  RepairLoopStatus,
+  RepairPolicy,
+  RunRepairLoopOptions,
+} from "./kernel/repair.js";
 export {defaultShellRunner, runShellVerification} from "./adapters/verification/shell.js";
 export type {ShellCheckSpec, ShellCommandResult, ShellRunner, ShellVerificationOptions, ShellVerificationOutput} from "./adapters/verification/shell.js";
