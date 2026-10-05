@@ -59,6 +59,14 @@ export {
 export type {ExecutionRiskInput, IsolationLevel, RiskAssessment, RiskClass} from "./security/risk.js";
 export {evaluateSecurityGate, persistSecurityDecision, recordSecurityDecision} from "./security/index.js";
 export type {SecurityDecisionKind, SecurityDecisionRecord, SecurityGateInput, SecurityGateResult} from "./security/index.js";
+export { HermesRuntime, defaultHermesCommandRunner, HERMES_BIN } from "./adapters/hermes/index.js";
+export type {
+  HermesCommandResult,
+  HermesCommandRunner,
+  HermesRunState,
+  HermesRuntimeOptions,
+  HermesUsage,
+} from "./adapters/hermes/index.js";
 export {createSystemProbe} from "./doctor/probe.js";
 export type {DoctorProbe, RepositoryState, RuntimeAvailability, WorktreeSupport} from "./doctor/probe.js";
 export {defaultShellRunner, runShellVerification} from "./adapters/verification/shell.js";
