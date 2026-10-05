@@ -18,6 +18,12 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run build
+      - name: Build the CLI
+        run: npm run build:cli
+      - name: Check the CLI runs
+        # A CLI that typechecks but cannot start is not a CLI. Running `--help`
+        # proves the emitted bin resolves and dispatches.
+        run: node dist/bin.js --help
       - name: Test
         run: npm test
       - name: Validate JSON schemas
@@ -67,6 +73,7 @@ jobs:
           test -f docs/scheduling.md
           test -f docs/repair.md
           test -f docs/doctor.md
+          test -f docs/cli.md
           test -f docs/licensing.md
           test -f docs/security-policy.md
           test -f docs/hermes-adapter.md
