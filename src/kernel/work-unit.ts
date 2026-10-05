@@ -49,6 +49,72 @@ export function workUnitToWireForm(workUnit: WorkUnit): Record<string, unknown> 
   return wire;
 }
 
+/**
+ * The inverse of `workUnitToWireForm`, for reading the published wire contract.
+ *
+ * Kept next to its counterpart on purpose: the snake_case/camelCase mapping is the
+ * thing most likely to drift, and having both directions in one file is what makes
+ * the round trip checkable rather than assumed.
+ *
+ * Throws on a structurally wrong value. A malformed Work Unit must not become a
+ * partially-populated object that happens to validate.
+ */
+export function workUnitFromWireForm(wire: unknown): WorkUnit {
+  if (typeof wire !== "object" || wire === null) {
+    throw new Error("a Work Unit must be an object");
+  }
+  const source = wire as Record<string, unknown>;
+
+  const required = ["id", "goal", "repository", "capabilities", "acceptance_criteria"] as const;
+  for (const field of required) {
+    if (source[field] === undefined) throw new Error(`work unit is missing required field '${field}'`);
+  }
+  if (typeof source["id"] !== "string" || source["id"] === "") {
+    throw new Error("work unit 'id' must be a non-empty string");
+  }
+  if (typeof source["goal"] !== "string" || source["goal"] === "") {
+    throw new Error(`work unit '${source["id"]}': 'goal' must be a non-empty string`);
+  }
+  if (typeof source["repository"] !== "string" || source["repository"] === "") {
+    throw new Error(`work unit '${source["id"]}': 'repository' must be a non-empty string`);
+  }
+
+  const capabilities = requireStringArray(source["capabilities"], "capabilities", String(source["id"]));
+  const acceptanceCriteria = requireStringArray(
+    source["acceptance_criteria"],
+    "acceptance_criteria",
+    String(source["id"]),
+  );
+
+  const workUnit: WorkUnit = {
+    id: String(source["id"]),
+    goal: String(source["goal"]),
+    repository: String(source["repository"]),
+    capabilities,
+    acceptanceCriteria,
+  };
+  if (source["base_revision"] !== undefined) workUnit.baseRevision = String(source["base_revision"]);
+  if (source["scope"] !== undefined) workUnit.scope = requireStringArray(source["scope"], "scope", workUnit.id);
+  if (source["verification"] !== undefined) {
+    workUnit.verification = requireStringArray(source["verification"], "verification", workUnit.id);
+  }
+  if (source["autonomy"] !== undefined) {
+    const autonomy = source["autonomy"];
+    if (autonomy !== "automatic" && autonomy !== "review" && autonomy !== "approval") {
+      throw new Error(`work unit '${workUnit.id}': 'autonomy' must be automatic, review, or approval`);
+    }
+    workUnit.autonomy = autonomy;
+  }
+  return workUnit;
+}
+
+function requireStringArray(value: unknown, field: string, id: string): string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new Error(`work unit '${id}': '${field}' must be an array of strings`);
+  }
+  return [...(value as string[])];
+}
+
 export function validateWorkUnit(workUnit: WorkUnit, schema: JsonSchema): WorkUnitValidation {
   const issues = validateAgainstSchema(workUnitToWireForm(workUnit), schema);
   if (workUnit.acceptanceCriteria.length === 0) {

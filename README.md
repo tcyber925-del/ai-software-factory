@@ -54,6 +54,23 @@ The factory owns policy, Work Units, scheduling semantics, verification evidence
 - Failed execution must leave durable, reconcilable state.
 - Automatic repair is bounded; default maximum is two attempts.
 
+## Running it
+
+```
+npm ci
+npm run verify            # typecheck, build the CLI, run the suite
+node dist/bin.js doctor   # is this environment ready?
+node dist/bin.js work run --work-units plan.json
+```
+
+`factory work run` is the composition layer: it validates Work Units, plans the
+schedule, selects a runtime, dispatches into isolated worktrees, verifies
+independently, repairs within a bound, and records the integration decision.
+
+Readiness comes only from independent verification, never from runtime status, and
+the checks run against the tree that was actually executed. See
+[docs/cli.md](docs/cli.md).
+
 ## Planned first vertical slice
 
 1. Define protocol types and schemas.
