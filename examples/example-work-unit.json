@@ -1,0 +1,15 @@
+{
+  "id": "PROJECT-001",
+  "goal": "Add a documented, verified health endpoint to the example service",
+  "repository": "example/project",
+  "base_revision": "0000000000000000000000000000000000000000",
+  "capabilities": ["backend", "testing", "documentation"],
+  "scope": ["src/health", "tests/health.test.ts", "docs/api.md"],
+  "acceptance_criteria": [
+    "GET /health returns 200 with a status field",
+    "all tests pass on a clean checkout",
+    "the endpoint is documented in docs/api.md"
+  ],
+  "verification": ["npm run build", "npm test"],
+  "autonomy": "review"
+}

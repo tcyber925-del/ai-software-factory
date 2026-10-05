@@ -101,6 +101,12 @@ The factory owns policy, Work Units, scheduling semantics, verification evidence
 
 When sources conflict, stop and escalate rather than silently choosing a new requirement.
 
+## Adoption
+
+New repository? Start from the template. See [`docs/adoption.md`](docs/adoption.md) for requirements,
+the step-by-step path, and a checklist. The step that matters most is requiring the `contract`
+job via branch protection — without it the verification gate is documentation, not enforcement.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE) and [`docs/licensing.md`](docs/licensing.md) for the rationale.

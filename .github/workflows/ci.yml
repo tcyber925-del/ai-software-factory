@@ -68,6 +68,11 @@ jobs:
           test -f docs/repair.md
           test -f docs/doctor.md
           test -f docs/licensing.md
+          test -f docs/adoption.md
+          test -f templates/project/package.json
+          test -f templates/project/.factory/policies/project-policy.md
+          test -f templates/skills/project-verification/SKILL.md
+          test -f examples/example-work-unit.json
           test -f LICENSE
       - name: Validate portable skill pack
         run: |
