@@ -37,6 +37,12 @@ Verification is independent evidence about whether acceptance criteria and repos
 
 A successful runtime execution is not a VerificationResult.
 
+## Durable event record
+Factory events are persisted to an append-only log so an execution stays reconstructable without
+terminal history. Every persisted event carries a `runId`, an optional `parentRunId` for repair
+attempts, and a `source` of `factory` or `runtime`. Only factory events determine factory state:
+a runtime reporting `worker.finished` cannot make an execution complete. See `docs/provenance.md`.
+
 ## ExecutionEvent
 Events form the append-only operational trace. Examples include:
 - work.created

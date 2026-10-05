@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExecutionEvent, VerificationCheck, VerificationResult } from "../../protocol.js";
+import type { EventLog } from "../../state/event-log.js";
 
 /**
  * Deterministic shell verification.
@@ -53,6 +54,9 @@ export interface ShellVerificationOptions {
   cwd: string;
   runner?: ShellRunner;
   attempt?: number;
+  /** When provided, verification events are persisted durably. */
+  eventLog?: EventLog;
+  runId?: string;
   id?: () => string;
   now?: () => string;
   evidenceTailBytes?: number;
@@ -75,7 +79,17 @@ export async function runShellVerification(options: ShellVerificationOptions): P
     events.push({ id: id(), workUnitId, type, timestamp: now(), payload });
   };
 
-  emit("verification.started", { checks: checks.map((check) => check.name) });
+  const attempt = options.attempt ?? 1;
+  const runId = options.runId ?? id();
+  const log = options.eventLog;
+
+  const persist = async (type: string, payload: Record<string, unknown>): Promise<void> => {
+    if (log === undefined) return;
+    await log.append([{ workUnitId, runId, source: "factory", type, payload }]);
+  };
+
+  emit("verification.started", { checks: checks.map((check) => check.name), attempt });
+  await persist("verification.started", { checks: checks.map((check) => check.name), attempt });
 
   const executed: VerificationCheck[] = [];
   for (const check of checks) {
@@ -93,12 +107,13 @@ export async function runShellVerification(options: ShellVerificationOptions): P
     workUnitId,
     status: failed.length === 0 ? "passed" : "failed",
     checks: executed,
+    attempt,
   };
-  if (options.attempt !== undefined) result.attempt = options.attempt;
 
-  emit(failed.length === 0 ? "verification.passed" : "verification.failed", {
-    failed: failed.map((check) => check.name),
-  });
+  const outcome = failed.length === 0 ? "verification.passed" : "verification.failed";
+  const outcomePayload = { failed: failed.map((check) => check.name), attempt };
+  emit(outcome, outcomePayload);
+  await persist(outcome, outcomePayload);
 
   return { result, events };
 }
