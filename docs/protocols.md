@@ -87,6 +87,13 @@ read-only, deterministic, and driven by an injected probe, so results do not dep
 the doctor runs on. A missing optional runtime is a warning, never an error: Herdr is a preferred
 supported runtime, not a mandatory dependency. See `docs/doctor.md`.
 
+## Work Unit wire form
+`schemas/work-unit.schema.json` is snake_case; the TypeScript `WorkUnit` is camelCase.
+`workUnitToWireForm` and `workUnitFromWireForm` in `src/kernel/work-unit.ts` are the only two places
+that correspondence is expressed, and they are tested as a round trip. The CLI parses work-unit
+files through the inverse projection rather than casting, so a malformed Work Unit becomes an error
+instead of a half-populated object that happens to validate.
+
 ## Repair
 A deterministic verification failure may trigger a bounded number of repair attempts. Repair is judged
 only by independent verification, never by the worker that performed it; the repair context restates
@@ -99,6 +106,13 @@ The scheduler decides ordering and grouping only. It exposes no field capable of
 verification or integration state, so it structurally cannot mark work correct or bypass the
 integration gate. When a Work Unit does not declare the paths or contracts it touches, it is
 treated as having uncertain ownership and serialized against everything. See `docs/scheduling.md`.
+
+## Composition
+`runPipeline` is the sequence: validate → plan → select runtime → dispatch → verify independently →
+repair within a bound → integration record. Two invariants are enforced there rather than assumed:
+readiness comes only from independent verification, and verification runs against the executed
+worktree rather than the factory's checkout. A blocked integration halts dependent batches. See
+`docs/cli.md`.
 
 ## Conflict
 A Conflict records why two Work Units cannot safely execute or integrate concurrently.
@@ -123,3 +137,4 @@ only through independent passing verification. See `docs/execution.md`.
 3. Every consequential state transition is traceable.
 4. Integration cannot bypass verification.
 5. Automatic repair is bounded.
+6. Verification inspects the tree that was executed, not the factory's own checkout.

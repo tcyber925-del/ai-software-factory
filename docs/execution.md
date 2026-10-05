@@ -2,12 +2,14 @@
 
 ## Purpose
 
-This documents the first end-to-end factory execution slice (FCT-006): the path from an
+This documents the execution slice (FCT-006): the path from an
 approved Work Unit to an explicit integration record, using only the existing
 provider-neutral protocols and `WorkerRuntime`.
 
-It is a kernel, not a scheduler. Nothing here decides *which* Work Unit runs next, and nothing
-here can mark work correct.
+`executeWorkUnit` itself is a kernel, not a scheduler. Nothing here decides *which* Work Unit runs
+next, and nothing here can mark work correct. Ordering is the scheduler's job
+([docs/scheduling.md](scheduling.md)); the composition that sequences the two is the pipeline
+([docs/cli.md](cli.md)).
 
 ## The path
 
@@ -33,6 +35,9 @@ Each stage emits an `ExecutionEvent`, so an execution is reconstructable from it
 | `src/kernel/execution.ts` | The orchestrated execution path and `ExecutionRecord` |
 | `src/kernel/integration.ts` | `IntegrationResult` and the integration gate |
 | `src/adapters/verification/shell.ts` | Deterministic shell verification |
+
+The composition that runs these in sequence, plus repair and event persistence, is
+`src/kernel/pipeline.ts`. See [docs/cli.md](cli.md).
 
 ## Invariants
 
@@ -61,6 +66,10 @@ wanted it to, because nothing in its inputs carries that information.
 `buildIntegrationResult` reaches `state: "ready"` only when `verification.status === "passed"`.
 Execution state is recorded for traceability but never decides the outcome.
 
+**7. Verification runs against the executed worktree.** When composed, the pipeline points the
+checks at the tree the runtime produced, not the factory's checkout; a runtime that reports no
+worktree blocks rather than falling back. See [docs/cli.md](cli.md).
+
 ## Determinism
 
 `executeWorkUnit` and `runShellVerification` accept injected `id()` and `now()` functions, so event
@@ -72,16 +81,24 @@ injectable `ShellRunner`.
 
 - The schema validator covers only the keywords `schemas/*.json` actually use. It is not a
   conforming JSON Schema implementation and should be revisited if the schemas grow.
-- CI validates that each schema file is well-formed and that at least five exist. It does not
-  validate instances against the schemas; this slice adds instance validation for Work Units but
-  does not yet change CI.
-- `IntegrationResult` is recorded but nothing publishes it. PR linkage, merge and the bounded repair
-  loop are later Work Units.
+- CI validates that each schema file is well-formed, names `$schema`/`title`/`type: object`, and
+  rejects unknown fields. It does **not** validate instances against the schemas; instance
+  validation is exercised by tests through the in-repo validator.
+- The kernel records `IntegrationResult` but does not itself open a pull request. It records the
+  decision; a human or a separate integration step acts on it.
 - Worktree isolation is demonstrated through the `WorkerRuntime` boundary. The kernel does not
   itself create Git worktrees, and a worktree is not a security boundary.
 
+## Composition
+
+Everything above existed before FCT-016 and none of it ran in sequence. `src/kernel/pipeline.ts`
+composes scheduling, execution, independent verification, bounded repair, and the integration
+record, and the invariants above are enforced there as well as here. See
+[docs/cli.md](cli.md).
+
 ## Boundary
 
-This slice introduces no scheduler, no Linear or Hermes adapter, no database, no hosted control
-plane, and no autonomous merge or release. Provider-specific behaviour remains inside adapters, and
-`WorkUnit` gained no provider-specific fields.
+The execution slice itself introduces no scheduler, no adapter, no database, and no hosted control
+plane. Adapters and the scheduler were added by later units and remain provider-neutral;
+`WorkUnit` gained no provider-specific fields. No autonomous merge or release exists anywhere in
+the factory.

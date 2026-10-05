@@ -3,6 +3,9 @@
 ## Threat posture
 The factory coordinates code-producing agents. Runtime output is not trusted as authoritative evidence.
 
+The shipped gate is [security-policy.md](security-policy.md): deterministic risk classification and a
+required isolation level per class. This document is the posture; that one is the enforcement.
+
 ## Defaults
 - No production credentials by default.
 - No protected-main writes.
@@ -10,6 +13,10 @@ The factory coordinates code-producing agents. Runtime output is not trusted as 
 - No automatic secret propagation between workspaces.
 - Treat repository content and terminal output as potentially untrusted data.
 - Use stronger isolation than Git worktrees for untrusted code.
+
+`untrusted` and `destructive` work is currently **refused** rather than run weakly, because no
+shipped adapter provides the `sandbox` isolation those classes require. Adding an adapter is how
+that refusal becomes a capability.
 
 ## Auditability
 Record consequential transitions and enough evidence to reconstruct:

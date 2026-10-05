@@ -5,6 +5,10 @@
 This documents FCT-011: making factory executions reconstructable from durable records alone,
 without relying on terminal history, and without introducing a database.
 
+A full composed run writes its trace to `.factory/events.jsonl` via the CLI. Every stage —
+scheduling, validation, workspace, worktree, worker, verification, repair, integration — appends as
+it happens, so an interrupted run stays inspectable rather than becoming a silent gap.
+
 ## Storage
 
 `src/state/event-log.ts` provides an append-only log of newline-delimited JSON.
@@ -87,3 +91,7 @@ as failed.
 No database, hosted control plane, distributed event infrastructure, analytics, or observability
 platform. Storage is a local file. The log records what happened; it does not decide whether work is
 correct — that remains verification's authority, and integration remains gated on it.
+
+One thing the log deliberately cannot answer: who decided a run succeeded. It records the evidence
+chain, and reconstruction derives the outcome from it. A human or the integration gate closes the
+loop; see [cli.md](cli.md).

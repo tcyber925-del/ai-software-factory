@@ -28,15 +28,19 @@ what work needs, never who provides it. A test asserts no such field can be intr
 
 `workspace.schema.json` mirrors `WorkspaceRef` (`id`, `path`, `worktree_path`) and adds optional
 `runtime` and `isolation` fields for auditability. It records which isolation mechanism was used; it
-does not assert that a Git worktree is a security boundary, because it is not. Risk classification for
-higher-risk execution belongs to FCT-014 (#21).
+does not assert that a Git worktree is a security boundary, because it is not. Risk classification and
+the isolation gate for higher-risk execution are in [security-policy.md](security-policy.md).
 
 ## Validation
-CI verifies every schema file is well-formed and declares `$schema`, `title`, and `type: object`, and
-that at least five exist. Instance validation against these schemas is exercised by tests via the
-in-repo validator in `src/kernel/json-schema.ts`, which implements only the keyword subset the schemas
-use. Adopting a full JSON Schema implementation is deliberately deferred to avoid adding a dependency
-for a fixed, small, known set of schemas.
+CI verifies every schema file is well-formed, declares `$schema`, `title`, and `type: object`, sets
+`additionalProperties: false`, and that all eight named schemas exist. Instance validation against
+these schemas is exercised by tests via the in-repo validator in `src/kernel/json-schema.ts`, which
+implements only the keyword subset the schemas use. Adopting a full JSON Schema implementation is
+deliberately deferred to avoid adding a dependency for a fixed, small, known set of schemas.
+
+CI does not validate instances, because a schema whose instances are only checked by tests can drift
+from the data the factory actually produces. Both directions are covered by
+`tests/protocol-schemas.test.ts` and the CLI's own `work validate` command.
 
 ## Compatibility rule
 Protocol changes are architecture-level changes when they alter required semantics, lifecycle state, authority, or interoperability.
