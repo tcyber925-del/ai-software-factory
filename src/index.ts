@@ -67,6 +67,20 @@ export type {
   HermesRuntimeOptions,
   HermesUsage,
 } from "./adapters/hermes/index.js";
+export { compileWorkUnit, evaluateEligibility, HARD_EXCLUDED_STATUS_TYPES, parseDeclaredRequirements } from "./adapters/linear/index.js";
+export type {
+  CompileOptions,
+  DeclaredRequirements,
+  EligibilityInput,
+  IntakeDecision,
+  LinearEligibilityConfig,
+  LinearIssue,
+  LinearOutcome,
+  RefusalReason,
+  ReflectInput,
+  StatusTransition,
+  WorkUnitTraceability,
+} from "./adapters/linear/index.js";
 export {createSystemProbe} from "./doctor/probe.js";
 export type {DoctorProbe, RepositoryState, RuntimeAvailability, WorktreeSupport} from "./doctor/probe.js";
 export {defaultShellRunner, runShellVerification} from "./adapters/verification/shell.js";
