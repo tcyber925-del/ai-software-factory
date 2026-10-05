@@ -45,6 +45,20 @@ export {
   runDoctor,
 } from "./doctor/doctor.js";
 export type {Diagnostic, DiagnosticSeverity, DoctorOptions, DoctorReport, DoctorStatus, RequiredRuntime} from "./doctor/doctor.js";
+export {
+  DANGEROUS_OPERATION_SCREEN_IS_BEST_EFFORT,
+  PROTECTED_BRANCHES,
+  assessExecutionRisk,
+  detectDangerousOperations,
+  evaluateBranchWrite,
+  evaluateCredentialAccess,
+  isProtectedBranch,
+  isolationStrength,
+  minimumIsolationFor,
+} from "./security/risk.js";
+export type {ExecutionRiskInput, IsolationLevel, RiskAssessment, RiskClass} from "./security/risk.js";
+export {evaluateSecurityGate, persistSecurityDecision, recordSecurityDecision} from "./security/index.js";
+export type {SecurityDecisionKind, SecurityDecisionRecord, SecurityGateInput, SecurityGateResult} from "./security/index.js";
 export {createSystemProbe} from "./doctor/probe.js";
 export type {DoctorProbe, RepositoryState, RuntimeAvailability, WorktreeSupport} from "./doctor/probe.js";
 export {defaultShellRunner, runShellVerification} from "./adapters/verification/shell.js";

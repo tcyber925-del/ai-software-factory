@@ -59,6 +59,13 @@ Events form the append-only operational trace. Examples include:
 - integration.ready
 - integration.blocked
 
+## Execution risk and isolation
+Work is classified `trusted`, `untrusted` or `destructive`, and admission requires an isolation level
+that meets the class: non-trusted work needs a **sandbox**, not an ordinary worktree, because a Git
+worktree isolates files rather than privileges. A declared risk may raise the class but never lower
+it, production credentials are never granted by the factory, and every decision is recorded as a
+durable factory event. See `docs/security-policy.md`.
+
 ## Doctor
 `factory doctor` reports whether the local environment can safely dispatch a Work Unit. It is
 read-only, deterministic, and driven by an injected probe, so results do not depend on the machine
