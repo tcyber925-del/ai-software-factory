@@ -2,7 +2,7 @@ import {describe,expect,it} from "vitest";
 import {FakeRuntime} from "../src/fake-runtime.js";
 import type {Worker,WorkUnit} from "../src/protocol.js";
 
-const workUnit:WorkUnit={id:"FCT-002",goal:"prove the runtime contract",repository:"tcyber925-del/ai-software-factory",capabilities:["testing"],acceptanceCriteria:["runtime lifecycle is deterministic"]};
+const workUnit:WorkUnit={id:"FCT-002",goal:"prove the runtime contract",repository:"example/project",capabilities:["testing"],acceptanceCriteria:["runtime lifecycle is deterministic"]};
 const worker:Worker={id:"test-worker",capabilities:["testing"],runtime:"fake"};
 
 describe("FakeRuntime",()=>{

@@ -82,6 +82,7 @@ The factory owns policy, Work Units, scheduling semantics, verification evidence
 ```
 .
 ├── .agents/skills/       # Portable Agent Skills
+├── LICENSE               # MIT (see docs/licensing.md)
 ├── .factory/             # Factory policies and workflow conventions
 ├── .github/workflows/    # Deterministic CI gates
 ├── docs/                 # Durable architecture and protocol documentation
@@ -102,4 +103,8 @@ When sources conflict, stop and escalate rather than silently choosing a new req
 
 ## License
 
-TBD.
+MIT. See [`LICENSE`](LICENSE) and [`docs/licensing.md`](docs/licensing.md) for the rationale.
+
+The factory is MIT so it can be adopted as a template without licensing friction. Adapter skills
+(`runtime/opencode`, `runtime/herdr`) describe how to operate third-party tools and confer no rights
+to those tools, which remain under their own licenses.

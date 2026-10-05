@@ -15,7 +15,7 @@ const workUnitSchema = JSON.parse(readFileSync("schemas/work-unit.schema.json", 
 const workUnit: WorkUnit = {
   id: "FCT-006",
   goal: "execute one bounded Work Unit end to end",
-  repository: "tcyber925-del/ai-software-factory",
+  repository: "example/project",
   capabilities: ["testing"],
   acceptanceCriteria: ["execution is traceable"],
   baseRevision: "HEAD",

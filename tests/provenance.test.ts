@@ -28,7 +28,7 @@ const workUnitSchema: JsonSchema = {
 const workUnit: WorkUnit = {
   id: "FCT-011",
   goal: "record durable provenance",
-  repository: "tcyber925-del/ai-software-factory",
+  repository: "example/project",
   capabilities: ["testing"],
   acceptanceCriteria: ["execution is reconstructable"],
   baseRevision: "abc123",
