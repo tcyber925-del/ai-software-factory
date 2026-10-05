@@ -57,6 +57,12 @@ Events form the append-only operational trace. Examples include:
 - integration.ready
 - integration.blocked
 
+## Doctor
+`factory doctor` reports whether the local environment can safely dispatch a Work Unit. It is
+read-only, deterministic, and driven by an injected probe, so results do not depend on the machine
+the doctor runs on. A missing optional runtime is a warning, never an error: Herdr is a preferred
+supported runtime, not a mandatory dependency. See `docs/doctor.md`.
+
 ## Repair
 A deterministic verification failure may trigger a bounded number of repair attempts. Repair is judged
 only by independent verification, never by the worker that performed it; the repair context restates
