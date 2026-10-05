@@ -1,0 +1,16 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://ai-software-factory.dev/schemas/workspace.schema.json",
+  "title":"Workspace",
+  "description":"An isolated execution workspace: a base path plus the worktree checkout a Work Unit runs in. Mirrors WorkspaceRef in src/protocol.ts on the snake_case wire form.",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["id","path"],
+  "properties":{
+    "id":{"type":"string","minLength":1},
+    "path":{"type":"string","minLength":1,"description":"Base workspace path."},
+    "worktree_path":{"type":"string","minLength":1,"description":"Isolated worktree checkout the Work Unit executes in."},
+    "runtime":{"type":"string","minLength":1,"description":"Runtime that created this workspace, for traceability only."},
+    "isolation":{"type":"string","minLength":1,"description":"Isolation mechanism in use, e.g. git_worktree. Recorded for auditability; a git worktree is developer isolation, not a security boundary."}
+  }
+}

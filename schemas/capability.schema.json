@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://ai-software-factory.dev/schemas/capability.schema.json",
+  "title":"Capability",
+  "description":"A stable requirement a Work Unit can request and a Worker can satisfy. Capabilities are the scheduler's contract with the Worker Registry: they name requirements, never providers or commands.",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["name"],
+  "properties":{
+    "name":{"type":"string","minLength":1,"description":"Stable capability identifier, e.g. frontend, backend, browser, testing, documentation, accessibility."},
+    "category":{"type":"string","minLength":1,"description":"Optional grouping for reporting, e.g. implementation, verification, interaction."},
+    "description":{"type":"string","minLength":1,"description":"What satisfying this capability requires."}
+  }
+}

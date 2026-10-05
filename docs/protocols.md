@@ -30,7 +30,9 @@ A capability is a stable requirement such as:
 - documentation
 - accessibility
 
-Capabilities are the scheduler's contract with the Worker Registry.
+Capabilities are the scheduler's contract with the Worker Registry. The wire contract is
+`schemas/capability.schema.json` and the TypeScript type is `Capability`. A capability names a
+requirement and must never carry a provider, command, or runtime field.
 
 ## VerificationResult
 Verification is independent evidence about whether acceptance criteria and repository gates pass.

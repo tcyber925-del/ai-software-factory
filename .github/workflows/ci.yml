@@ -27,10 +27,28 @@ jobs:
           const dir = 'schemas';
           const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
           if (files.length < 5) throw new Error('Expected protocol schemas are missing');
+          const expected = [
+            'work-unit.schema.json',
+            'worker.schema.json',
+            'capability.schema.json',
+            'workspace.schema.json',
+            'verification-result.schema.json',
+            'integration-result.schema.json',
+            'execution-event.schema.json',
+            'conflict.schema.json',
+          ];
+          for (const required of expected) {
+            if (!files.includes(required)) {
+              throw new Error('Missing protocol schema: ' + required);
+            }
+          }
           for (const file of files) {
             const data = JSON.parse(fs.readFileSync(dir + '/' + file, 'utf8'));
             if (!data.$schema || !data.title || data.type !== 'object') {
               throw new Error('Invalid schema contract: ' + file);
+            }
+            if (data.additionalProperties !== false) {
+              throw new Error('Schema must reject unknown fields: ' + file);
             }
           }
           console.log('Validated', files.length, 'schemas');

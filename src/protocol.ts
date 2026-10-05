@@ -11,6 +11,8 @@ export interface Conflict { id:string; workUnits:string[]; reason:ConflictReason
 export type IntegrationState = "ready"|"blocked";
 export interface IntegrationResult { workUnitId:string; state:IntegrationState; reason:string; verification:VerificationResult; commit?:string; events:ExecutionEvent[]; }
 export interface WorkspaceRef { id:string; path:string; worktreePath?:string; }
+/** A stable capability requirement. Names a requirement, never a provider or command. Mirrors schemas/capability.schema.json. */
+export interface Capability { name:string; category?:string; description?:string; }
 export interface AgentRef { id:string; runtimeId:string; }
 export interface RuntimeEvidence { runtime:string; workspaceId:string; agentId:string; events:ExecutionEvent[]; }
 export type RuntimeFailure = "unavailable"|"startup_failed"|"prompt_failed"|"timeout"|"blocked"|"agent_exited"|"workspace_failed"|"cleanup_failed"|"protocol_incompatible";
