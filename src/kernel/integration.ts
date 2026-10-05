@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExecutionEvent, IntegrationResult, VerificationResult } from "../protocol.js";
 import type { ExecutionRecord } from "./execution.js";
+import type { EventLog } from "../state/event-log.js";
 
 /**
  * The integration gate record.
@@ -15,6 +16,9 @@ export interface BuildIntegrationOptions {
   execution: ExecutionRecord;
   verification: VerificationResult;
   commit?: string;
+  /** When provided, the integration outcome is persisted durably. */
+  eventLog?: EventLog;
+  runId?: string;
   id?: () => string;
   now?: () => string;
 }
@@ -24,10 +28,11 @@ export interface IntegrationOutcome {
   events: ExecutionEvent[];
 }
 
-export function buildIntegrationResult(options: BuildIntegrationOptions): IntegrationOutcome {
+export async function buildIntegrationResult(options: BuildIntegrationOptions): Promise<IntegrationOutcome> {
   const { execution, verification } = options;
   const id = options.id ?? randomUUID;
   const now = options.now ?? (() => new Date().toISOString());
+  const runId = options.runId ?? id();
 
   const events: ExecutionEvent[] = [];
   const emit = (type: string, payload: Record<string, unknown>): void => {
@@ -35,13 +40,30 @@ export function buildIntegrationResult(options: BuildIntegrationOptions): Integr
   };
 
   const blocker = blockingReason(execution, verification);
-
-  emit(blocker === undefined ? "integration.ready" : "integration.blocked", {
+  const verificationAttempts = verification.attempt ?? 1;
+  const payload = {
     verificationStatus: verification.status,
+    verificationAttempts,
     executionStatus: execution.status,
     runtimeStatus: execution.runtimeStatus ?? null,
     reason: blocker ?? "verification_passed",
-  });
+  };
+
+  emit(blocker === undefined ? "integration.ready" : "integration.blocked", payload);
+
+  if (options.eventLog !== undefined) {
+    // The integration outcome is persisted before it is returned, so a crash
+    // after this point cannot leave the record claiming a different state.
+    await options.eventLog.append([
+      {
+        workUnitId: execution.workUnitId,
+        runId,
+        source: "factory",
+        type: blocker === undefined ? "integration.ready" : "integration.blocked",
+        payload,
+      },
+    ]);
+  }
 
   const result: IntegrationResult = {
     workUnitId: execution.workUnitId,

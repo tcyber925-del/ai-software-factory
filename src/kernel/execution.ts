@@ -11,6 +11,7 @@ import type {
 } from "../protocol.js";
 import type { JsonSchema } from "./json-schema.js";
 import type { LabelledRuntime } from "./work-unit.js";
+import type { EventLog, LoggableEvent } from "../state/event-log.js";
 import { selectRuntime, validateWorkUnit } from "./work-unit.js";
 
 /**
@@ -51,6 +52,12 @@ export interface ExecuteWorkUnitOptions {
   prompt: string;
   schema: JsonSchema;
   baseRevision?: string;
+  /** When provided, factory and runtime events are persisted durably as they occur. */
+  eventLog?: EventLog;
+  /** Correlates every event from this execution attempt. */
+  runId?: string;
+  /** Set when this attempt was spawned by another, e.g. a repair. */
+  parentRunId?: string;
   /** Injected for deterministic tests. */
   id?: () => string;
   now?: () => string;
@@ -60,24 +67,54 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
   const { workUnit, worker, runtimes, prompt, schema, baseRevision } = options;
   const id = options.id ?? randomUUID;
   const now = options.now ?? (() => new Date().toISOString());
+  const runId = options.runId ?? id();
+  const parentRunId = options.parentRunId;
+  const log = options.eventLog;
 
   const events: ExecutionEvent[] = [];
   const emit = (type: string, payload: Record<string, unknown>): void => {
     events.push({ id: id(), workUnitId: workUnit.id, type, timestamp: now(), payload });
   };
 
+  /**
+   * Persists a factory event. Durability failures are surfaced rather than
+   * swallowed: silently losing provenance would defeat the purpose of the log.
+   */
+  const persist = async (type: string, payload: Record<string, unknown>): Promise<void> => {
+    if (log === undefined) return;
+    await log.append([
+      withParent({ workUnitId: workUnit.id, runId, source: "factory", type, payload }, parentRunId),
+    ]);
+  };
+
   const validation = validateWorkUnit(workUnit, schema);
   if (!validation.valid) {
     emit("work.rejected", { issues: validation.issues });
+    await persist("work.rejected", { issues: validation.issues });
     return { workUnitId: workUnit.id, status: "blocked", events, failure: "work_unit_invalid" };
   }
   emit("work.validated", { capabilities: workUnit.capabilities, acceptanceCriteria: workUnit.acceptanceCriteria });
+  await persist("work.validated", {
+    capabilities: workUnit.capabilities,
+    acceptanceCriteria: workUnit.acceptanceCriteria,
+    baseRevision: baseRevision ?? workUnit.baseRevision ?? null,
+    workerId: worker.id,
+  });
 
   const selection = await selectRuntime(workUnit, runtimes);
   if (selection.selected === undefined) {
     emit("work.blocked", { reason: "no_capable_runtime", missingCapabilities: selection.missingCapabilities });
+    await persist("work.blocked", {
+      reason: "no_capable_runtime",
+      missingCapabilities: selection.missingCapabilities,
+    });
     return { workUnitId: workUnit.id, status: "blocked", events, failure: "no_capable_runtime" };
   }
+
+  await persist("runtime.selected", {
+    runtime: selection.selected.name,
+    candidates: selection.candidates,
+  });
 
   const chosen: LabelledRuntime = selection.selected;
   const runtime: WorkerRuntime = chosen.runtime;
@@ -88,13 +125,17 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
   try {
     workspace = await runtime.createWorkspace(workUnit);
     emit("workspace.created", { runtime: chosen.name, workspaceId: workspace.id, path: workspace.path });
+    await persist("workspace.created", { runtime: chosen.name, workspaceId: workspace.id, path: workspace.path });
 
     const worktree = await runtime.createWorktree(workspace, baseRevision ?? workUnit.baseRevision);
     workspace = worktree;
-    emit("worktree.created", { worktreePath: worktree.worktreePath ?? null, baseRevision: baseRevision ?? workUnit.baseRevision ?? null });
+    const revision = baseRevision ?? workUnit.baseRevision ?? null;
+    emit("worktree.created", { worktreePath: worktree.worktreePath ?? null, baseRevision: revision });
+    await persist("worktree.created", { worktreePath: worktree.worktreePath ?? null, baseRevision: revision });
 
     agent = await runtime.startAgent(worktree, worker);
     emit("worker.started", { runtime: chosen.name, agentId: agent.id, workerId: worker.id });
+    await persist("worker.started", { runtime: chosen.name, agentId: agent.id, workerId: worker.id });
 
     await runtime.promptAgent(agent, prompt);
     emit("worker.prompted", { agentId: agent.id });
@@ -102,6 +143,22 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
     const runtimeStatus = await runtime.waitAgent(agent, 120_000);
     const runtimeEvidence = await runtime.collectRuntimeEvidence(agent);
     emit("worker.finished", { agentId: agent.id, runtimeStatus });
+    await persist("worker.finished", { agentId: agent.id, runtimeStatus });
+
+    // Runtime-observed events are stored with source "runtime" so they can never
+    // be mistaken for factory state during reconstruction.
+    if (log !== undefined && agent !== undefined && runtimeEvidence.events.length > 0) {
+      const agentId = agent.id;
+      await log.append(
+        runtimeEvidence.events.map((event) => withParent({
+          workUnitId: workUnit.id,
+          runId,
+          source: "runtime" as const,
+          type: event.type,
+          payload: { agentId: event.payload?.["agentId"] ?? agentId, runtime: runtimeEvidence.runtime },
+        }, parentRunId)),
+      );
+    }
 
     const record: ExecutionRecord = {
       workUnitId: workUnit.id,
@@ -118,6 +175,7 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
   } catch (error) {
     const failure = asRuntimeFailure(error);
     emit("runtime.failure", { runtime: chosen.name, failure, message: messageOf(error) });
+    await persist("runtime.failure", { runtime: chosen.name, failure, message: messageOf(error) });
     const record: ExecutionRecord = {
       workUnitId: workUnit.id,
       status: "failed",
@@ -136,11 +194,18 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
       try {
         await runtime.cleanupWorkspace(workspace);
         emit("workspace.cleaned", { workspaceId: workspace.id });
+        await persist("workspace.cleaned", { workspaceId: workspace.id });
       } catch (error) {
         emit("workspace.cleanup_failed", { workspaceId: workspace.id, message: messageOf(error) });
+        await persist("workspace.cleanup_failed", { workspaceId: workspace.id, message: messageOf(error) });
       }
     }
   }
+}
+
+/** Stamps the spawning run on an event, so a repair attempt stays linked to its origin. */
+function withParent(event: LoggableEvent, parentRunId: string | undefined): LoggableEvent {
+  return parentRunId === undefined ? event : { ...event, parentRunId };
 }
 
 /**

@@ -44,3 +44,5 @@ jobs:
           test -f docs/schemas.md
           test -f docs/runtime-adapters.md
           test -f docs/security.md
+          test -f docs/execution.md
+          test -f docs/provenance.md

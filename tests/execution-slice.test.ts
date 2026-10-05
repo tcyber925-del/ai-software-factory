@@ -232,7 +232,7 @@ describe("verification stays independent of worker completion", () => {
     const { result: verification } = await verify(failingRunner);
     expect(verification.status).toBe("failed");
 
-    const { result } = buildIntegrationResult({ execution: record, verification });
+    const { result } = await buildIntegrationResult({ execution: record, verification });
     expect(result.state).toBe("blocked");
     expect(result.reason).toBe("verification_failed");
   });
@@ -251,10 +251,14 @@ describe("verification stays independent of worker completion", () => {
     expect(record.status).toBe("completed");
 
     // A crashed worker carries no verification evidence of its own.
-    expect(record.runtimeEvidence?.events.every((event) => event.type !== "verification.passed")).toBe(true);
+    expect(
+      record.runtimeEvidence?.events.every(
+        (event: { type: string }) => event.type !== "verification.passed",
+      ),
+    ).toBe(true);
 
     const { result: verification } = await verify(failingRunner);
-    const { result } = buildIntegrationResult({ execution: record, verification });
+    const { result } = await buildIntegrationResult({ execution: record, verification });
     expect(result.state).toBe("blocked");
   });
 
@@ -273,7 +277,7 @@ describe("verification stays independent of worker completion", () => {
     expect(verification.status).toBe("passed");
     expect(events.map((event) => event.type)).toEqual(["verification.started", "verification.passed"]);
 
-    const { result } = buildIntegrationResult({ execution: record, verification, commit: "abc123" });
+    const { result } = await buildIntegrationResult({ execution: record, verification, commit: "abc123" });
     expect(result.state).toBe("ready");
     expect(result.commit).toBe("abc123");
     expect(result.verification).toBe(verification);
@@ -291,7 +295,7 @@ describe("verification stays independent of worker completion", () => {
       ...clock,
     });
     const { result: verification } = await verify(passingRunner, "FCT-999");
-    const { result } = buildIntegrationResult({ execution: record, verification });
+    const { result } = await buildIntegrationResult({ execution: record, verification });
     expect(result.state).toBe("blocked");
     expect(result.reason).toBe("verification_work_unit_mismatch");
   });
@@ -308,10 +312,9 @@ describe("shell verification", () => {
       },
     ]);
     expect(result.checks[0]?.evidence).toContain("1 test failed");
-    expect(result.attempt).toBeUndefined();
   });
 
-  it("carries a repair attempt number without changing independence", async () => {
+  it("always numbers its attempt so repair limits are enforceable", async () => {
     const clock = deterministic();
     const { result } = await runShellVerification({
       workUnitId: workUnit.id,
@@ -323,5 +326,15 @@ describe("shell verification", () => {
     });
     expect(result.attempt).toBe(2);
     expect(result.status).toBe("passed");
+
+    // Unnumbered verification still reports attempt 1, so counting is total.
+    const first = await runShellVerification({
+      workUnitId: workUnit.id,
+      checks: [{ name: "unit-tests", command: "npm", args: ["test"] }],
+      cwd: ".",
+      runner: passingRunner,
+      ...deterministic(),
+    });
+    expect(first.result.attempt).toBe(1);
   });
 });
