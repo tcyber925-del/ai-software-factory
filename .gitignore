@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build and tool output
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Test residue
+.tmp-test/
+.factory/events.jsonl
+.factory/**/*.jsonl
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-error.log*
+*.log
+
+# Git internals that must never be committed
+.worktrees/

@@ -67,6 +67,8 @@ jobs:
           test -f docs/scheduling.md
           test -f docs/repair.md
           test -f docs/doctor.md
+          test -f docs/licensing.md
+          test -f LICENSE
       - name: Validate portable skill pack
         run: |
           test -d .agents/skills/factory
