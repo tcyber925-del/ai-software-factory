@@ -59,6 +59,13 @@ Events form the append-only operational trace. Examples include:
 - integration.ready
 - integration.blocked
 
+## Hermes
+Hermes is an optional orchestration entry point behind the same `WorkerRuntime` contract. It cannot
+state that work is correct: `waitAgent` returns only its exit status, `inspectAgent` returns only
+`{ status }`, and the integration gate is computed by modules that never receive Hermes state as an
+input. Parent Work Unit identity is carried into every dispatched run, and Hermes' own approval
+prompts and tool restrictions are preserved. See `docs/hermes-adapter.md`.
+
 ## Execution risk and isolation
 Work is classified `trusted`, `untrusted` or `destructive`, and admission requires an isolation level
 that meets the class: non-trusted work needs a **sandbox**, not an ordinary worktree, because a Git

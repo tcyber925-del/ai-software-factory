@@ -69,6 +69,7 @@ jobs:
           test -f docs/doctor.md
           test -f docs/licensing.md
           test -f docs/security-policy.md
+          test -f docs/hermes-adapter.md
           test -f docs/adoption.md
           test -f templates/project/package.json
           test -f templates/project/.factory/policies/project-policy.md
