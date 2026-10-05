@@ -18,5 +18,14 @@ export type {
   RunSummary,
   VerificationSummary,
 } from "./state/provenance.js";
+export {detectConflict, planSchedule} from "./kernel/scheduler.js";
+export type {
+  DecisionOutcome,
+  DetectedConflict,
+  PlanScheduleOptions,
+  ScheduledWorkUnit,
+  SchedulePlan,
+  SchedulingDecision,
+} from "./kernel/scheduler.js";
 export {defaultShellRunner, runShellVerification} from "./adapters/verification/shell.js";
 export type {ShellCheckSpec, ShellCommandResult, ShellRunner, ShellVerificationOptions, ShellVerificationOutput} from "./adapters/verification/shell.js";

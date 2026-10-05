@@ -57,6 +57,12 @@ Events form the append-only operational trace. Examples include:
 - integration.ready
 - integration.blocked
 
+## Scheduling
+The scheduler decides ordering and grouping only. It exposes no field capable of expressing
+verification or integration state, so it structurally cannot mark work correct or bypass the
+integration gate. When a Work Unit does not declare the paths or contracts it touches, it is
+treated as having uncertain ownership and serialized against everything. See `docs/scheduling.md`.
+
 ## Conflict
 A Conflict records why two Work Units cannot safely execute or integrate concurrently.
 
