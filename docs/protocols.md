@@ -65,6 +65,9 @@ Typical reasons:
 ## IntegrationResult
 Integration records the result of the merge/integration gate and links back to verification evidence.
 
+The concrete shape is `IntegrationResult` in `src/protocol.ts`, and `state: "ready"` is reachable
+only through independent passing verification. See `docs/execution.md`.
+
 ## Key invariants
 1. Provider-specific commands never appear in Work Units.
 2. Runtime completion never implies correctness.

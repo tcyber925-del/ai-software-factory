@@ -8,6 +8,8 @@ export interface VerificationResult { workUnitId:string; status:VerificationStat
 export interface ExecutionEvent { id:string; workUnitId:string; type:string; timestamp:string; payload?:Record<string,unknown>; }
 export type ConflictReason = "overlapping_paths"|"dependency"|"shared_contract"|"runtime_assumption"|"protected_resource"|"uncertain";
 export interface Conflict { id:string; workUnits:string[]; reason:ConflictReason; details?:string; }
+export type IntegrationState = "ready"|"blocked";
+export interface IntegrationResult { workUnitId:string; state:IntegrationState; reason:string; verification:VerificationResult; commit?:string; events:ExecutionEvent[]; }
 export interface WorkspaceRef { id:string; path:string; worktreePath?:string; }
 export interface AgentRef { id:string; runtimeId:string; }
 export interface RuntimeEvidence { runtime:string; workspaceId:string; agentId:string; events:ExecutionEvent[]; }
