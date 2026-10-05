@@ -48,3 +48,4 @@ jobs:
           test -f docs/provenance.md
           test -f docs/scheduling.md
           test -f docs/repair.md
+          test -f docs/doctor.md

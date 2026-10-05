@@ -37,5 +37,15 @@ export type {
   RepairPolicy,
   RunRepairLoopOptions,
 } from "./kernel/repair.js";
+export {
+  MINIMUM_NODE_MAJOR,
+  REQUIRED_PROJECT_FILES,
+  RUNTIME_REQUIREMENTS,
+  formatDoctorReport,
+  runDoctor,
+} from "./doctor/doctor.js";
+export type {Diagnostic, DiagnosticSeverity, DoctorOptions, DoctorReport, DoctorStatus, RequiredRuntime} from "./doctor/doctor.js";
+export {createSystemProbe} from "./doctor/probe.js";
+export type {DoctorProbe, RepositoryState, RuntimeAvailability, WorktreeSupport} from "./doctor/probe.js";
 export {defaultShellRunner, runShellVerification} from "./adapters/verification/shell.js";
 export type {ShellCheckSpec, ShellCommandResult, ShellRunner, ShellVerificationOptions, ShellVerificationOutput} from "./adapters/verification/shell.js";
