@@ -1,0 +1,13 @@
+{
+  "_comment": "Recorded from the live Linear workspace tcyber/ENG on 2026-10-05 via the Linear API. Captured so intake and status tests run offline against real payloads instead of invented shapes. statusType values here are the workspace's actual status taxonomy.",
+  "statuses": [
+    { "id": "7ebd92ba-d602-4b4d-9996-9e318ec8b9a8", "type": "triage", "name": "Triage" },
+    { "id": "ae663cdb-589b-43d7-aff2-ea2521e40d41", "type": "started", "name": "In Review" },
+    { "id": "9e9c375c-d5a1-4e7e-9ee2-7bf945ac9638", "type": "backlog", "name": "Backlog" },
+    { "id": "886fc835-1030-4ef9-9ea3-c1996a6fb869", "type": "started", "name": "In Progress" },
+    { "id": "8745ae43-3270-49ae-b84b-536dd9dad4e1", "type": "duplicate", "name": "Duplicate" },
+    { "id": "418c384c-013c-4eee-a750-91c9ca998c66", "type": "canceled", "name": "Canceled" },
+    { "id": "283a04e3-4861-4c32-8d08-197b67f9c7cb", "type": "unstarted", "name": "Todo" },
+    { "id": "0ac8071f-408e-4839-b7e4-bfbb50169b0f", "type": "completed", "name": "Done" }
+  ]
+}

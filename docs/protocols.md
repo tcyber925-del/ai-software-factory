@@ -59,6 +59,14 @@ Events form the append-only operational trace. Examples include:
 - integration.ready
 - integration.blocked
 
+## Linear intake
+Linear is an execution system, not the factory protocol. Only explicitly eligible work dispatches:
+Backlog, Triage, Duplicate, Canceled and Done are never dispatchable and configuration cannot
+override that, and the eligible-status allowlist is empty by default. An issue must declare its
+acceptance criteria and capabilities explicitly, and supply a repository; the factory refuses rather
+than inferring a product or architecture decision. Status reflection proposes an outcome from
+recorded evidence and requires human acknowledgement before reporting done. See `docs/linear-adapter.md`.
+
 ## Hermes
 Hermes is an optional orchestration entry point behind the same `WorkerRuntime` contract. It cannot
 state that work is correct: `waitAgent` returns only its exit status, `inspectAgent` returns only
