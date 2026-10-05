@@ -69,17 +69,18 @@ export interface CommandOutput {
 
 export const USAGE = [
   "Usage:",
-  "  factory work run       --work-units <file.json> [--runtime <name>]",
-  "  factory work validate  --work-units <file.json>",
+  "  factory work run       --work-units <plan.json> [--runtime <name>]",
+  "  factory work validate  --work-units <plan.json>",
   "  factory verify",
   "  factory doctor",
   "",
   "Flags:",
-  "  --work-units <path>   JSON array of { workUnit, dependsOn?, paths?, contracts? }",
+  "  --work-units <path>   Plan: array of { workUnit, dependsOn?, paths?, contracts? }",
   "  --runtime <name>      Restrict dispatch to one runtime by name",
   "  --max-parallel <n>    Bound concurrency inside one batch",
   "  --verify-in <where>   'worktree' (default, verifies the executed tree) or 'repo'",
   "  --json                Emit machine-readable output",
+  "  --debug               Include a stack trace on failure",
   "  --help                Show this message",
 ].join("\n");
 

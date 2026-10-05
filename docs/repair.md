@@ -59,6 +59,10 @@ so an escalation can be traced back to the original execution.
 `execute` and `verify` are both supplied by the caller. The loop embeds no runtime and no verification
 implementation, so it cannot accidentally verify itself, and it is testable without any agent present.
 
+In the composed pipeline, `verify` re-runs the checks against the worktree the repair attempt
+produced, so a repair that never touched the work cannot pass by pointing at an unchanged tree. See
+[cli.md](cli.md).
+
 ## Boundary
 
 No unbounded self-healing, no autonomous architecture change, no autonomous merge or release. The

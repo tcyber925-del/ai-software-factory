@@ -18,15 +18,15 @@ running the sequence.
 ## Commands
 
 ```
-factory work run       --work-units <file.json> [--runtime <name>]
-factory work validate  --work-units <file.json>
+factory work run       --work-units <plan.json> [--runtime <name>]
+factory work validate  --work-units <plan.json>
 factory verify
 factory doctor
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--work-units <path>` | JSON array of `{ workUnit, dependsOn?, paths?, contracts?, runtimes?, protectedResources? }` |
+| `--work-units <path>` | A plan: JSON array of `{ workUnit, dependsOn?, paths?, contracts?, runtimes?, protectedResources? }` |
 | `--runtime <name>` | Restrict dispatch to one runtime. An unknown name is an error, never a silent substitution |
 | `--max-parallel <n>` | Bound concurrency inside one batch |
 | `--verify-in <where>` | `worktree` (default) or `repo` — see below |
@@ -99,10 +99,44 @@ or `--verify-in repo` on a repository whose checks you trust.
 
 ## The work-unit file
 
-The file is the published wire contract — snake_case, matching
+`--work-units` takes a **plan**: a JSON array whose entries wrap a Work Unit with
+the scheduling facts the scheduler needs.
+
+```json
+[
+  {
+    "workUnit": {
+      "id": "PROJECT-001",
+      "goal": "Add a health endpoint",
+      "repository": "example/project",
+      "capabilities": ["backend", "testing"],
+      "acceptance_criteria": ["GET /health returns 200"]
+    },
+    "paths": ["src/health"],
+    "dependsOn": []
+  }
+]
+```
+
+The Work Unit inside is the published wire contract — snake_case, matching
 `schemas/work-unit.schema.json` — and is parsed through `workUnitFromWireForm`
 rather than cast. A malformed Work Unit must not become a half-populated object
 that happens to validate.
+
+| Wrapper field | Meaning |
+| --- | --- |
+| `paths` | Repository paths this unit may touch; drives conflict detection |
+| `dependsOn` | Work Unit ids that must complete first |
+| `contracts` | Shared API/schema identifiers it modifies |
+| `runtimes` | Runtime identifiers it assumes |
+| `protectedResources` | Exclusive resources it needs, e.g. a protected branch |
+
+All wrapper fields are optional. A unit that declares no `paths` is treated as
+having uncertain ownership and serialized against everything — see
+[scheduling.md](scheduling.md).
+
+`examples/example-plan.json` is a runnable one-unit plan, and
+`examples/example-work-unit.json` is the same Work Unit in isolation.
 
 `workUnitFromWireForm` and `workUnitToWireForm` live in the same file on purpose.
 The snake_case/camelCase mapping is the thing most likely to drift, and having

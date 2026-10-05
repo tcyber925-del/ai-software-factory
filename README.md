@@ -4,9 +4,14 @@ A provider-neutral, GitHub-native coordination layer for safely dispatching AI e
 
 ## Status
 
-**Foundation bootstrap — FCT-001**
+**Runnable — the vertical slice is complete and composed**
 
-This repository is establishing the factory contract and first vertical-slice architecture. The scheduler and hosted control plane are intentionally not implemented yet.
+The factory is implemented and can be run: `factory work run` validates Work Units, plans the
+schedule, selects a runtime, dispatches into isolated worktrees, verifies independently, repairs
+within a bound, and records the integration decision.
+
+Still not implemented, by design: hosted control plane, database, scheduler daemon, web dashboard,
+custom agent runtime, and autonomous merge or release. See [Non-goals for V1](#non-goals-for-v1).
 
 ## Core invariant
 
@@ -58,9 +63,10 @@ The factory owns policy, Work Units, scheduling semantics, verification evidence
 
 ```
 npm ci
-npm run verify            # typecheck, build the CLI, run the suite
-node dist/bin.js doctor   # is this environment ready?
-node dist/bin.js work run --work-units plan.json
+npm run verify                        # typecheck, build the CLI, run the suite
+node dist/bin.js doctor               # is this environment ready?
+node dist/bin.js work validate --work-units examples/example-plan.json
+node dist/bin.js work run      --work-units examples/example-plan.json
 ```
 
 `factory work run` is the composition layer: it validates Work Units, plans the
@@ -71,17 +77,23 @@ Readiness comes only from independent verification, never from runtime status, a
 the checks run against the tree that was actually executed. See
 [docs/cli.md](docs/cli.md).
 
-## Planned first vertical slice
+## The vertical slice
 
-1. Define protocol types and schemas.
-2. Implement a fake runtime for deterministic tests.
-3. Implement direct OpenCode runtime adapter.
-4. Implement Herdr runtime adapter.
-5. Run one Work Unit in an isolated worktree.
-6. Verify independently.
-7. Produce a traceable PR.
-8. Prove failure/reconciliation and conflict behavior.
-9. Dogfood the factory on a real repository.
+Shipped and verified:
+
+1. Protocol types and schemas.
+2. A fake runtime for deterministic tests.
+3. Direct OpenCode, Herdr, and Hermes runtime adapters.
+4. Work Unit execution in an isolated worktree.
+5. Independent verification with a bounded repair loop.
+6. The integration gate and a traceable PR.
+7. Failure, reconciliation, and conflict behaviour.
+8. Durable event provenance.
+9. A scheduler and a runtime-agnostic pipeline.
+10. Security classification and an isolation gate.
+11. A `factory doctor` environment check.
+12. A runnable CLI composing all of the above.
+13. Dogfooded on a real external repository.
 
 ## Non-goals for V1
 
@@ -104,10 +116,42 @@ the checks run against the tree that was actually executed. See
 ├── .github/workflows/    # Deterministic CI gates
 ├── docs/                 # Durable architecture and protocol documentation
 ├── schemas/              # Machine-readable protocol contracts
-├── src/                  # Factory implementation (introduced after bootstrap)
+├── src/                  # Factory implementation
+│   ├── kernel/           # Protocol logic: validation, execution, scheduling, repair, pipeline
+│   ├── adapters/         # Runtime and verification adapters
+│   ├── state/            # Durable event log and provenance
+│   ├── security/         # Risk classification and the isolation gate
+│   ├── doctor/           # Environment diagnostics
+│   ├── cli/              # Command dispatch and argument parsing
+│   └── bin.ts            # `factory` entry point
+├── examples/             # Example Work Units and a runnable plan
+├── fixtures/             # Recorded and synthetic payloads for offline tests
 ├── tests/                # Deterministic and integration tests
-└── templates/            # Reusable project/skill templates
+├── templates/            # Reusable project/skill templates
+└── AGENTS.md             # The agent contract every agent must follow
 ```
+
+## Documentation
+
+| Document | Covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Ownership boundaries, provider neutrality, isolation |
+| [docs/cli.md](docs/cli.md) | The runnable pipeline and its two enforced invariants |
+| [docs/protocols.md](docs/protocols.md) | Work Unit, Worker, Capability, and the protocol shapes |
+| [docs/schemas.md](docs/schemas.md) | The machine-readable contracts and their TypeScript correspondence |
+| [docs/execution.md](docs/execution.md) | The execution slice and the integration gate |
+| [docs/scheduling.md](docs/scheduling.md) | Ordering, batching, and conflict detection |
+| [docs/repair.md](docs/repair.md) | Bounded repair and escalation |
+| [docs/provenance.md](docs/provenance.md) | The append-only event log and reconstruction |
+| [docs/runtime-adapters.md](docs/runtime-adapters.md) | The `WorkerRuntime` contract and adapter obligations |
+| [docs/hermes-adapter.md](docs/hermes-adapter.md) | Hermes as an optional runtime, not an authority |
+| [docs/linear-adapter.md](docs/linear-adapter.md) | Linear intake and status reflection |
+| [docs/security.md](docs/security.md) | Threat posture and defaults |
+| [docs/security-policy.md](docs/security-policy.md) | Risk classification and the isolation gate |
+| [docs/verification-and-merge-gates.md](docs/verification-and-merge-gates.md) | Verification and merge-gate policy |
+| [docs/doctor.md](docs/doctor.md) | Environment diagnostics |
+| [docs/adoption.md](docs/adoption.md) | Adopting the factory as a template |
+| [docs/licensing.md](docs/licensing.md) | The MIT decision and its rationale |
 
 ## Source hierarchy
 

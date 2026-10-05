@@ -69,6 +69,12 @@ Decisions are also emitted as `scheduling.planned`, `scheduling.scheduled`, and
 `scheduling.blocked` **factory** events, so scheduling decisions are auditable and durable.
 Scheduling never emits runtime or verification events.
 
+## Composition
+
+`planSchedule` is used standalone by the scheduler's own tests, and is also the first stage of
+`runPipeline`, which honours its batches: units in a batch may run together, batches run in order,
+and a blocked integration halts dependent batches. See [cli.md](cli.md).
+
 ## Boundary
 
 This is a local, single-process planner. No distributed scheduler, hosted control plane, ML

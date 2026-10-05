@@ -10,10 +10,11 @@ self-authorizing correctness.
 |---|---|
 | `schemas/` | 8 machine-readable protocol contracts |
 | `docs/` | Architecture, protocols, security, scheduling, repair, provenance, verification policy |
+| `src/cli/`, `src/kernel/pipeline.ts` | The runnable `factory` command and the pipeline it composes |
 | `.agents/skills/` | Portable Agent Skills — the operating guarantees |
 | `.github/workflows/ci.yml` | The `contract` job: build, tests, schemas, docs, skill pack |
 | `.factory/policies/` | Autonomy policy and local project policy template |
-| `examples/` | An example Work Unit in both human and wire form |
+| `examples/` | An example Work Unit in human, wire, and plan form |
 | `templates/project/`, `templates/skills/` | Starting points for a new project and skills |
 
 ## Requirements
@@ -28,11 +29,21 @@ Verify your environment:
 
 ```bash
 npm ci
-factory doctor          # reports healthy / degraded / blocked
+npm run build:cli
+node dist/bin.js doctor          # reports healthy / degraded / blocked
 ```
 
 `degraded` means dispatch can proceed but something is optional-missing.
 `blocked` means a required capability is absent — fix before dispatching.
+
+Then dispatch work:
+
+```bash
+node dist/bin.js work validate --work-units docs/work-units/PROJECT-001.plan.json
+node dist/bin.js work run      --work-units docs/work-units/PROJECT-001.plan.json
+```
+
+`work run` exits `0` only when every Work Unit reached `ready`. See [cli.md](cli.md).
 
 ## Adoption steps
 
@@ -85,8 +96,20 @@ Then `npm install` to generate your own lockfile.
 ### 5. Author your first Work Unit
 
 ```bash
-cp examples/example-work-unit.md  docs/work-units/PROJECT-001.md
-cp examples/example-work-unit.json docs/work-units/PROJECT-001.json
+mkdir -p docs/work-units
+cp examples/example-work-unit.md    docs/work-units/PROJECT-001.md
+cp examples/example-work-unit.json docs/work-units/PROJECT-001.json   # the Work Unit alone
+cp examples/example-plan.json      docs/work-units/PROJECT-001.plan.json  # what the CLI dispatches
+```
+
+The two JSON files differ deliberately. `example-work-unit.json` is the **Work Unit** — the wire
+contract from `schemas/work-unit.schema.json`, which is also what Linear intake compiles to.
+`example-plan.json` is a **plan**: an array whose entries wrap a Work Unit with the scheduling facts
+the scheduler needs (`paths`, `dependsOn`, `contracts`, `runtimes`, `protectedResources`). The CLI
+reads the plan form:
+
+```bash
+node dist/bin.js work validate --work-units docs/work-units/PROJECT-001.plan.json
 ```
 
 Requirements, not providers:
@@ -110,13 +133,14 @@ inside the skill.
 ## Adoption checklist
 
 - [ ] `npm ci` succeeds on a fresh clone
-- [ ] `npm run build` and `npm test` pass
-- [ ] `factory doctor` reports at least `degraded`, ideally `healthy`
+- [ ] `npm run verify` passes (typecheck, CLI emit, tests)
+- [ ] `node dist/bin.js doctor` reports at least `degraded`, ideally `healthy`
 - [ ] Branch protection requires the `contract` job on protected branches
 - [ ] Branch protection is enforced on admins
 - [ ] `AGENTS.md` present at the repository root
 - [ ] `.factory/policies/` reflects this project's real boundaries
 - [ ] At least one example Work Unit authored
+- [ ] `node dist/bin.js work validate` accepts it
 - [ ] No `node_modules/` or build output committed
 - [ ] Secrets supplied by environment, never committed
 

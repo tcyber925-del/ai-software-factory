@@ -1,8 +1,11 @@
 # Factory Doctor
 
+Run `factory doctor` before dispatching work.
+
 ## Purpose
 
 This documents FCT-013: making local setup and runtime problems diagnosable **before** dispatch.
+Run it with `factory doctor`.
 
 `factory doctor` answers one question — can this machine safely run a Work Unit? — and reports
 per-check diagnostics rather than a single pass/fail bit.
@@ -73,5 +76,6 @@ Local diagnostics only. The doctor reports; it does not install, repair, configu
 introduces no hosted service, scheduler, or runtime abstraction, and it is not a substitute for
 verification — it reports whether the environment is ready, never whether work is correct.
 
-`factory doctor` is currently a library (`runDoctor` / `createSystemProbe`). Wiring it to the
-`factory` CLI entry point belongs with the CLI boundary work.
+`runDoctor` and `createSystemProbe` are the library behind `factory doctor`. The CLI exits `1` when
+the report is `blocked` and `0` when it is `degraded`, so a blocked environment can gate CI while a
+missing optional runtime does not.
