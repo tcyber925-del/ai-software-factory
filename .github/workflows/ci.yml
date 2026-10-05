@@ -67,3 +67,15 @@ jobs:
           test -f docs/scheduling.md
           test -f docs/repair.md
           test -f docs/doctor.md
+      - name: Validate portable skill pack
+        run: |
+          test -d .agents/skills/factory
+          for skill in work-unit git-workflow worktree scope-review verification pr-review visual-verify release integration; do
+            test -f ".agents/skills/factory/$skill/SKILL.md" || { echo "missing skill: $skill"; exit 1; }
+          done
+          for skill in herdr opencode; do
+            test -f ".agents/skills/runtime/$skill/SKILL.md" || { echo "missing runtime skill: $skill"; exit 1; }
+          done
+          # Skills must stay portable: no proprietary wrapper, plain SKILL.md only.
+          test -z "$(find .agents/skills -name '*.json' -o -name '*.yaml' -o -name '*.yml' | head -1)" \
+            || { echo "proprietary skill metadata found"; exit 1; }
