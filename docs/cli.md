@@ -29,6 +29,7 @@ factory doctor
 | `--work-units <path>` | A plan: JSON array of `{ workUnit, dependsOn?, paths?, contracts?, runtimes?, protectedResources? }` |
 | `--runtime <name>` | Restrict dispatch to one runtime. An unknown name is an error, never a silent substitution |
 | `--max-parallel <n>` | Bound concurrency inside one batch |
+| `--prompt-timeout-ms <n>` | Ceiling on one agent prompt (default 900000) |
 | `--verify-in <where>` | `worktree` (default) or `repo` — see below |
 | `--json` | Machine-readable output |
 | `--debug` | Include a stack trace on failure |

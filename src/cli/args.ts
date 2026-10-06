@@ -79,6 +79,7 @@ export const USAGE = [
   "  --checks <path>       JSON array of { name, command, args? }; default is npm test",
   "  --runtime <name>      Restrict dispatch to one runtime by name",
   "  --max-parallel <n>    Bound concurrency inside one batch",
+  "  --prompt-timeout-ms <n>  Ceiling on one agent prompt (default 900000)",
   "  --verify-in <where>   'worktree' (default, verifies the executed tree) or 'repo'",
   "  --json                Emit machine-readable output",
   "  --debug               Include a stack trace on failure",

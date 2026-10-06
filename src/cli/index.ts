@@ -67,10 +67,11 @@ export function loadSchema(): JsonSchema {
  * reproducible on a fresh clone. The others appear only when the binary is on PATH;
  * an unavailable runtime is reported rather than silently substituted.
  */
-export function availableRuntimes(repositoryRoot: string): LabelledRuntime[] {
+export function availableRuntimes(repositoryRoot: string, promptTimeoutMs?: number): LabelledRuntime[] {
   const runtimes: LabelledRuntime[] = [{ name: "fake", runtime: new FakeRuntime() }];
+  const timeout = promptTimeoutMs === undefined ? {} : { promptTimeoutMs };
   const optional: LabelledRuntime[] = [
-    { name: "opencode", runtime: new OpenCodeRuntime({ repositoryRoot }) },
+    { name: "opencode", runtime: new OpenCodeRuntime({ repositoryRoot, ...timeout }) },
     { name: "herdr", runtime: new HerdrRuntime({ repositoryRoot }) },
     { name: "hermes", runtime: new HermesRuntime({ repositoryRoot }) },
   ];
@@ -144,7 +145,18 @@ async function workRun(args: ParsedArgs, context: RunContext): Promise<CommandOu
   const workUnits = resolveUnits(args);
   const schema = loadSchema();
   const cwd = context.cwd;
-  const runtimes = selectRuntimes(availableRuntimes(cwd), args.flags.get("runtime"));
+  // An operator whose runtime is legitimately slow needs a recourse; a ceiling they
+  // cannot move is indistinguishable from a hang.
+  const promptTimeoutRaw = args.flags.get("prompt-timeout-ms");
+  let promptTimeoutMs: number | undefined;
+  if (promptTimeoutRaw !== undefined) {
+    promptTimeoutMs = Number.parseInt(promptTimeoutRaw, 10);
+    if (!Number.isFinite(promptTimeoutMs) || promptTimeoutMs <= 0) {
+      throw new Error(`--prompt-timeout-ms must be a positive number of milliseconds (got '${promptTimeoutRaw}')`);
+    }
+  }
+
+  const runtimes = selectRuntimes(availableRuntimes(cwd, promptTimeoutMs), args.flags.get("runtime"));
   // The default suits npm projects, which is what the templates ship. Anything else
   // supplies its own checks, because a verification command the project does not
   // recognise can only ever fail — and a check that cannot pass is indistinguishable
