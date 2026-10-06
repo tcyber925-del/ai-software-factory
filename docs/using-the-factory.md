@@ -31,6 +31,17 @@ factory: blocked — repair limit reached for PROJECT-001
   repair_exhausted PROJECT-001  verification=failed integration=blocked
 ```
 
+A failure that names the *cause* rather than the symptom reads like this, and the difference matters:
+
+```
+factory: blocked — PROJECT-001 did not reach the integration gate (execution_timeout)
+  failed  PROJECT-001  runtime failure=timeout
+```
+
+`execution_timeout` means the runtime never ran, so the failed check is a consequence. `repair` is
+for fixing checks against completed work and is skipped here — the budget would otherwise be spent
+re-issuing the same prompt to a runtime that already failed.
+
 That is the factory working, not failing.
 
 ## Before you start

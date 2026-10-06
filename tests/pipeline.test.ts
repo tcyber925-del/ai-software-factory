@@ -7,7 +7,7 @@ import type { ShellRunner } from "../src/adapters/verification/shell.js";
 import { FakeRuntime } from "../src/fake-runtime.js";
 import { InMemoryEventLog } from "../src/state/event-log.js";
 import { reconstructExecution } from "../src/state/provenance.js";
-import type { WorkUnit, WorkspaceRef } from "../src/protocol.js";
+import type { AgentRef, WorkUnit, WorkspaceRef } from "../src/protocol.js";
 
 /**
  * These tests exist because per-unit green is not evidence that a *sequence* is
@@ -562,5 +562,159 @@ describe("the security gate is applied before dispatch", () => {
     // content must not get the weaker classification.
     const { result } = await run(signals({ risk: { consumesUntrustedContent: true, declaredRisk: "trusted" } }));
     expect(result.status).toBe("blocked");
+  });
+});
+
+/**
+ * A runtime that failed to run is not re-dispatched by the repair loop.
+ *
+ * Found by dogfooding: a timing-out runtime was prompted three times and created
+ * three worktrees before escalating. Repair exists to fix failing checks against
+ * *completed* work. When the runtime never completed, the failed check is a symptom,
+ * and the same prompt to the same runtime re-encounters the same fault.
+ */
+describe("repair is not spent on a runtime that failed to run", () => {
+  /** Counts the prompts issued and the worktrees created. */
+  function counting() {
+    const state = { prompts: 0, worktrees: 0 };
+    const runtime: LabelledRuntime = {
+      name: "failing-runtime",
+      runtime: Object.assign(Object.create(new FakeRuntime()), {
+        promptAgent(agentRef: AgentRef, prompt: string) {
+          state.prompts += 1;
+          void agentRef;
+          void prompt;
+          return Promise.reject(new Error("timed out after 900000ms: runtime run"));
+        },
+        createWorktree(workspace: WorkspaceRef, baseRevision?: string) {
+          state.worktrees += 1;
+          return Promise.resolve({ ...workspace, worktreePath: `${workspace.path}/worktree`, ...(baseRevision === undefined ? {} : { baseRevision }) } as WorkspaceRef);
+        },
+      }) as unknown as LabelledRuntime["runtime"],
+    };
+    return { state, runtime };
+  }
+
+  it("issues one prompt, not three, for a runtime that always times out", async () => {
+    const { state, runtime } = counting();
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [runtime],
+      checks,
+      cwd: ".",
+      runner: failing,
+      ...clock(),
+    });
+
+    // The whole cost of the defect: 3 prompts and 3 worktrees became 1 and 1.
+    expect(state.prompts).toBe(1);
+    expect(state.worktrees).toBe(1);
+    expect(result.status).toBe("blocked");
+    expect(result.runs[0]?.repairAttempts).toBeUndefined();
+  });
+
+  it("still issues three prompts for a runtime that completes with failing checks", async () => {
+    // The regression this guards: "skip repair on failure" read too broadly would
+    // disable repair entirely. A completed run with failing checks is exactly the
+    // case repair exists for, and must still get the initial attempt plus two.
+    let prompts = 0;
+    const runtime: LabelledRuntime = {
+      name: "completing",
+      runtime: Object.assign(Object.create(new FakeRuntime()), {
+        promptAgent() {
+          prompts += 1;
+          return Promise.resolve();
+        },
+      }) as unknown as LabelledRuntime["runtime"],
+    };
+
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [runtime],
+      checks,
+      cwd: ".",
+      runner: failing,
+      ...clock(),
+    });
+
+    expect(prompts).toBe(3);
+    expect(result.runs[0]?.repairAttempts).toBe(2);
+  });
+
+  it("still verifies after a runtime failure, and keeps the evidence", async () => {
+    const { state, runtime } = counting();
+    const log = new InMemoryEventLog();
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [runtime],
+      checks,
+      cwd: ".",
+      runner: failing,
+      eventLog: log,
+      ...clock(),
+    });
+
+    // Verification ran and its result is retained — partial work may have landed.
+    expect(state.prompts).toBe(1);
+    expect(result.runs[0]?.verification.status).toBe("failed");
+    const types = log.stored().map((event) => event.type);
+    expect(types).toContain("verification.started");
+    expect(types).toContain("runtime.failure");
+    // ...but no repair events, because no repair was attempted.
+    expect(types.some((type) => type.startsWith("repair."))).toBe(false);
+  });
+
+  it("names the runtime failure rather than blaming the checks", async () => {
+    const { runtime } = counting();
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [runtime],
+      checks,
+      cwd: ".",
+      runner: failing,
+      ...clock(),
+    });
+
+    const run0 = result.runs[0]!;
+    expect(run0.outcome).toBe("failed");
+    // The reason must point at the runtime, not at the operator's test suite.
+    expect(run0.integration.reason).toBe("execution_timeout");
+    expect(run0.integration.reason).not.toBe("verification_failed");
+    expect(result.reason).toContain("execution_timeout");
+  });
+
+  it("records why repair was skipped", async () => {
+    const { runtime } = counting();
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [runtime],
+      checks,
+      cwd: ".",
+      runner: failing,
+      ...clock(),
+    });
+    expect(result.runs[0]?.repairReason).toBe("repair_not_attempted_runtime_timeout");
+  });
+
+  it("does not regress a run that passes", async () => {
+    const { state, runtime } = counting();
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [runtime],
+      checks,
+      cwd: ".",
+      runner: passing,
+      ...clock(),
+    });
+    // One prompt, no repair, ready.
+    expect(state.prompts).toBe(1);
+    expect(result.status).toBe("blocked"); // the stub always rejects the prompt
+    expect(result.runs[0]?.outcome).toBe("failed");
   });
 });
