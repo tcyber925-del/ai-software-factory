@@ -5,6 +5,10 @@ export type {JsonSchema, JsonValue, ValidationIssue} from "./kernel/json-schema.
 export {validateWorkUnit, workUnitFromWireForm, workUnitToWireForm, selectRuntime} from "./kernel/work-unit.js";
 export type {LabelledRuntime, RuntimeCandidate, RuntimeSelection, WorkUnitValidation} from "./kernel/work-unit.js";
 export {runPipeline} from "./kernel/pipeline.js";
+export {checkScope, describeScopeViolation, normalizePath} from "./kernel/scope.js";
+export type {OutOfScopeChange, ScopeCheck} from "./kernel/scope.js";
+export {gitChangedFiles, parsePorcelain} from "./adapters/git/changes.js";
+export type {ChangedFiles} from "./adapters/git/changes.js";
 export type {PipelineResult, RunPipelineOptions, UnitOutcome, UnitRun} from "./kernel/pipeline.js";
 export {executeWorkUnit} from "./kernel/execution.js";
 export type {ExecuteWorkUnitOptions, ExecutionFailure, ExecutionRecord, ExecutionStatus} from "./kernel/execution.js";

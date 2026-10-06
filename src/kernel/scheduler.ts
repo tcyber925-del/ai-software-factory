@@ -2,6 +2,7 @@ import type { Conflict, ConflictReason, WorkerRuntime, WorkUnit } from "../proto
 import type { EventLog } from "../state/event-log.js";
 import type { LabelledRuntime } from "./work-unit.js";
 import type { ExecutionRiskInput } from "../security/risk.js";
+import { normalizePath } from "./scope.js";
 
 /**
  * Conservative dependency and conflict scheduler.
@@ -268,10 +269,6 @@ function pathsOverlap(a: string, b: string): boolean {
   const right = normalizePath(b);
   if (left === right) return true;
   return left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
-}
-
-function normalizePath(path: string): string {
-  return path.replace(/^\.\//, "").replace(/\/+$/, "");
 }
 
 async function capabilityBlockers(
