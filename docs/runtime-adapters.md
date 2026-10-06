@@ -119,10 +119,12 @@ rather than run weakly: `untrusted` and `destructive` Work Units require a `sand
 level, and no adapter offers one. See [security-policy.md](security-policy.md). Adding an adapter is
 therefore how that refusal would become a capability — not by loosening the gate.
 
-Two things about that refusal, stated plainly because the doc set would otherwise imply otherwise:
-the gate is not called by `factory work run`, and there is no sandbox adapter that could satisfy it
-even if it were. The refusal is reachable only through a caller that invokes
-`evaluateSecurityGate`. See [security-policy.md](security-policy.md#not-enforced-at-dispatch).
+One thing about that refusal, stated plainly because the doc set would otherwise imply
+otherwise: there is **no sandbox adapter that could satisfy it**. The gate itself *is* on the
+dispatch path — `evaluateSecurityGate` runs before any workspace, worktree, or runtime is created —
+so `untrusted` and `destructive` work is refused for real. What makes it a refusal rather than a
+capability is the absence of an adapter offering `sandbox`. See
+[security-policy.md](security-policy.md#enforced-at-dispatch).
 
 
 ## Herdr adapter boundary

@@ -18,10 +18,14 @@ required isolation level per class. This document is the posture; that one is th
 provides the `sandbox` isolation those classes require. Adding an adapter is how that refusal becomes
 a capability.
 
-One caveat that belongs in the posture rather than only in the enforcement doc: the refusal is
-implemented in `src/security/` but **not called by `factory work run`**. `evaluateSecurityGate` has
-no caller in the composed pipeline, so the guarantee above describes the library's behaviour, not the
-CLI's. See [security-policy.md](security-policy.md#not-enforced-at-dispatch).
+The refusal is **enforced at dispatch**: `evaluateSecurityGate` runs in `runOne` before any
+workspace, worktree, or runtime is created, so a refusal is of the work rather than of its
+consequences. Every decision — admitted or refused — is persisted as a durable factory event. See
+[security-policy.md](security-policy.md#enforced-at-dispatch).
+
+What remains a caveat is *what* it enforces: declarations, not content. Absence of a declaration is
+not evidence of safety, so an operator who declares nothing gets `trusted`, which a Git worktree
+satisfies.
 
 ## Auditability
 Record consequential transitions and enough evidence to reconstruct:

@@ -201,7 +201,7 @@ describe("the adoption guide cannot ship a broken starting point", () => {
   it("tells the adopter to delete the factory's own test suite", () => {
     const adoption = read("docs/adoption.md");
     expect(adoption).toMatch(/rm -rf tests fixtures/);
-    expect(adoption).toMatch(/instead of yours|instead of your/);
+    expect(adoption.replace(/\s+/g, " ")).toMatch(/instead of yours/);
   });
 
   it("warns that copying package.json clobbers an existing project", () => {
@@ -233,6 +233,96 @@ describe("the adoption guide cannot ship a broken starting point", () => {
     // Guard the guard: if the suite ever moves, this test must be revisited rather
     // than silently passing because the path no longer exists.
     expect(() => read("tests/pipeline.test.ts")).not.toThrow();
+  });
+});
+
+describe("documentation cannot rot into inaccuracy", () => {
+  /**
+   * Three of these assertions exist because a claim in these docs was *wrong* at
+   * some point and nothing noticed.
+   */
+
+  it("states no test count, because a count in prose rots", () => {
+    // This project has published three different suite sizes across its history,
+    // including one inflated 80% by a stale worktree that looked like real coverage.
+    // The count is available by running the suite; a number in prose is stale the
+    // moment a test is added and nobody can tell which figure is current.
+    for (const path of ALL_DOCS) {
+      const match = read(path).match(/\b\d{3,4} tests\b/);
+      expect(match, `${path} states a test count ("${match?.[0] ?? ""}") — point readers at \`npm run verify\` instead`).toBeNull();
+    }
+  });
+
+  it("does not claim the repository is untagged when a release exists", () => {
+    for (const path of ALL_DOCS) {
+      expect(read(path), `${path} claims there are no release tags`).not.toMatch(/no release tags/i);
+    }
+  });
+
+  it("describes the security gate as composed, not library-only", () => {
+    // The security gate was library-only for several merges while other docs
+    // described it as enforced. The mismatch is worse than either state alone.
+    //
+    // Every phrasing below is one this project has actually used while the gate was
+    // unwired, so each is checked individually. A first version of this test matched
+    // only one of them and passed while `security.md` and `runtime-adapters.md` were
+    // both still claiming "no caller" — a guard written for one phrasing is not a
+    // guard. Note what is deliberately absent: a bare `/has no caller/`, because
+    // `adoption.md` legitimately teaches that a green run proves nothing about a
+    // control that is not called.
+    const unwired = [
+      /library only, not composed/i,
+      /not composed into/i,
+      /has no caller in the composed pipeline/i,
+      /not called by [`']?factory work run/i,
+      /the gate is not called/i,
+      /reachable only through a caller/i,
+      /the library's behaviour, not the/i,
+    ];
+    for (const path of ALL_DOCS) {
+      const body = read(path);
+      for (const pattern of unwired) {
+        expect(body, `${path} still describes the security gate as unwired (${pattern})`).not.toMatch(pattern);
+      }
+    }
+  });
+
+  it("points at security-policy anchors that exist", () => {
+    // Both docs linked to `security-policy.md#not-enforced-at-dispatch`, an anchor
+    // that stopped existing when the section was renamed. A broken cross-reference is
+    // the reader arriving at a page and finding nothing.
+    const anchors = new Set(
+      (read("docs/security-policy.md").match(/^#{2,3} .*$/gm) ?? [])
+        .map((heading) => heading.replace(/^#+\s*/, "").toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-"))
+    );
+    expect(anchors.size).toBeGreaterThan(0);
+    for (const path of ALL_DOCS) {
+      for (const match of read(path).matchAll(/security-policy\.md#([a-z0-9-]+)/g)) {
+        expect(anchors, `${path} links to security-policy.md#${match[1]}, which does not exist`).toContain(match[1]!);
+      }
+    }
+  });
+
+  it("does not describe `paths` as advisory now that it is enforced", () => {
+    for (const path of ALL_DOCS) {
+      expect(read(path), `${path} still calls scope advisory`).not.toMatch(
+        /scope is advisory|paths is advisory|declared but never enforced/i,
+      );
+    }
+  });
+
+  it("does not claim factory verify is broken", () => {
+    // Fixed when it learned to read the project's own scripts. The stale claim
+    // outlived the bug by several merges.
+    for (const path of ALL_DOCS) {
+      expect(read(path), `${path} still says factory verify is unusable`).not.toMatch(
+        /factory verify` is \*\*not currently usable|verify` is unusable/i,
+      );
+    }
+  });
+
+  it("names the release somewhere a reader will find it", () => {
+    expect(read("README.md")).toMatch(/v0\.1\.0/);
   });
 });
 

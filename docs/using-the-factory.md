@@ -404,8 +404,10 @@ cat .factory/events.jsonl | tail -20
 # What `work run` actually does
 
 ```
-validate → plan → select runtime → dispatch → verify (independent)
-        → repair if verification failed, bounded → integration record
+validate → security gate → plan → select runtime → dispatch → verify (independent)
+        → repair if verification failed and the runtime actually ran, bounded
+        → scope check: did it stay inside its declared `paths`?
+        → integration record
 ```
 
 Every stage appends to `.factory/events.jsonl` as it happens, so an interrupted run
@@ -470,7 +472,9 @@ skipped. A project declaring none of them is a **failure**, never a pass: nothin
 verified must never be reported as verification passed.
 
 That is exactly what CI runs: typecheck, build the CLI, smoke-run it, run the tests.
-**Expected: 301 tests across 20 files.**
+Expected: the whole suite passing. Run `npm test` for the current count — it is
+deliberately not written here, because a number in prose is wrong the moment a test
+is added.
 
 If you see a much larger number, something is collecting tests you did not intend.
 A stale `.worktrees/` entry does exactly this, which is why `vitest.config.ts` now
