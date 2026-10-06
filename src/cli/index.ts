@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { JsonSchema } from "../kernel/json-schema.js";
 import { runPipeline } from "../kernel/pipeline.js";
@@ -27,8 +28,36 @@ import { USAGE, parseArgs, readWorkUnitFile, selectRuntimes } from "./args.js";
  * verification, and has no path that turns runtime status into correctness.
  */
 
+/**
+ * Locates the Work Unit schema.
+ *
+ * The schema ships *with the factory*, not with the project being worked on, so it
+ * is resolved relative to this module first. Falling back to the current directory
+ * keeps the factory usable when it is run from inside its own checkout.
+ *
+ * Reading only from `process.cwd()` would make the CLI unusable in an adopting
+ * project: the factory's own `doctor` does not require `schemas/` there, so it
+ * would report a healthy environment and then `work run` would fail on a missing
+ * file. The check and the action must agree on where the contract lives.
+ */
 export function loadSchema(): JsonSchema {
-  return JSON.parse(readFileSync(join(process.cwd(), "schemas/work-unit.schema.json"), "utf8")) as JsonSchema;
+  const here = dirname(fileURLToPath(import.meta.url));
+  // `src/cli/` and `dist/cli/` are both two levels below the package root.
+  const candidates = [
+    join(here, "..", "..", "schemas", "work-unit.schema.json"),
+    join(process.cwd(), "schemas", "work-unit.schema.json"),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(readFileSync(candidate, "utf8")) as JsonSchema;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  throw new Error(
+    `could not locate schemas/work-unit.schema.json (looked in ${candidates.join(", ")}). The factory installation appears incomplete.`,
+  );
 }
 
 /**

@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -250,5 +250,29 @@ describe("the CLI cannot report success from runtime status", () => {
     expect(payload.status).toBe("blocked");
     expect(payload.runs[0]?.verification).not.toBe("passed");
     expect(payload.runs[0]?.integration).toBe("blocked");
+  });
+});
+describe("the schema is found from outside the factory checkout", () => {
+  it("resolves schemas/work-unit.schema.json relative to the factory, not the cwd", () => {
+    // An adopting project does not ship the factory's schemas, and `doctor` does
+    // not require them. If the CLI read them from the cwd, `doctor` would report a
+    // healthy environment and `work validate` would then fail on a missing file —
+    // a check and an action disagreeing about where the contract lives.
+    expect(loadSchema().required).toContain("acceptance_criteria");
+  });
+
+  it("does not depend on a schemas directory in the current directory", async () => {
+    // Both assertions run from the repository root, which *does* have schemas/.
+    // The test is that removing that coincidence would not change the outcome;
+    // the candidate list in loadSchema puts the factory location first.
+    const previous = process.cwd();
+    const scratch = join(tmpdir(), "factory-no-schemas");
+    mkdirSync(scratch, { recursive: true });
+    try {
+      process.chdir(scratch);
+      expect(loadSchema().required).toContain("acceptance_criteria");
+    } finally {
+      process.chdir(previous);
+    }
   });
 });
