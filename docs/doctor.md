@@ -19,6 +19,15 @@ registered worktrees, and the file tree before and after a full diagnostic pass,
 to be identical. It also proves inspecting worktree support does not register a worktree, and that
 a full pass does not create a branch.
 
+## Test-suite timing
+
+Several doctor tests spawn real `git` and real agent binaries against real temporary
+repositories. Measured in the full suite those take 2.0-4.1s each, which sits on
+Vitest's 5s default timeout. `vitest.config.ts` raises the ceiling to 30s.
+
+Two intermittent failures were observed, both at 5050ms — the default — asserting
+nothing. This is headroom for tests that do real work, not a correctness change.
+
 ## Determinism and CI independence
 
 All environment access goes through the injected `DoctorProbe`, so diagnostics depend on the

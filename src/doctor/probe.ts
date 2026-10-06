@@ -47,6 +47,14 @@ export interface DoctorProbe {
   fileExists(relativePath: string): boolean;
 }
 
+/**
+ * How long a `<runtime> --version` probe may take before it is treated as unusable.
+ *
+ * Long enough for a healthy binary on a loaded machine, short enough that a wedged
+ * one cannot stall a dispatch decision indefinitely.
+ */
+export const RUNTIME_PROBE_TIMEOUT_MS = 5_000;
+
 /** Probes the real machine. Read-only. */
 export function createSystemProbe(repositoryRoot?: string): DoctorProbe {
   const root = resolve(repositoryRoot ?? process.cwd());
@@ -118,10 +126,19 @@ export function createSystemProbe(repositoryRoot?: string): DoctorProbe {
         const { stdout } = await execFileAsync(runtime, ["--version"], {
           cwd: root,
           maxBuffer: 1024 * 1024,
+          // Without a timeout this call blocks indefinitely on a wedged binary, and
+          // a probe that hangs is indistinguishable from one that is merely slow.
+          // More importantly, an unbounded call makes the report machine-timing
+          // dependent: two runs of an unmodified doctor could disagree, which breaks
+          // the determinism `runDoctor` documents and its tests assert.
+          timeout: RUNTIME_PROBE_TIMEOUT_MS,
         });
         const version = stdout.trim().split("\n")[0] ?? "";
         return version.length > 0 ? { available: true, version } : { available: true };
       } catch {
+        // A timeout, a non-zero exit, or a missing binary all mean the same thing
+        // here: this runtime is not usable. The reason is deliberately not
+        // distinguished — the operator's remedy is the same in every case.
         return { available: false };
       }
     },
