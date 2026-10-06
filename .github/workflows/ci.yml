@@ -83,6 +83,7 @@ jobs:
           test -f fixtures/linear/issues.json
           test -f fixtures/linear/statuses.json
           test -f docs/adoption.md
+          test -f templates/project/README.md
           test -f templates/project/package.json
           test -f templates/project/.factory/policies/project-policy.md
           test -f templates/skills/project-verification/SKILL.md
