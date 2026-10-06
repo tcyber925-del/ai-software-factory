@@ -13,6 +13,11 @@ it happens, so an interrupted run stays inspectable rather than becoming a silen
 
 `src/state/event-log.ts` provides an append-only log of newline-delimited JSON.
 
+The file is `.factory/events.jsonl`, written by `factory work run`, and it is **gitignored** — a
+clean clone starts with no trace. The log is local evidence of what this machine did, not a committed
+artifact of what the project did. Anything that needs to outlive the working copy has to be copied
+out deliberately.
+
 **Append-only is a property of the format, not a convention.** Each record is one line, the file is
 only ever opened for append, and there is deliberately no update, delete, or truncate operation.
 Line order *is* the sequence, so no counter can drift out of sync with the stored history.
@@ -78,6 +83,35 @@ same in a log, and conflating them would hide a crash.
 `countAttempts(records, workUnitId)` counts `verification.started` factory events for a Work Unit.
 `runShellVerification` always records an attempt number, defaulting to `1`, so counting is total and
 the factory repair limit can be enforced against durable evidence rather than in-memory state.
+
+## What a real trace looks like
+
+Running the shipped example plan produces a trace ending in refusal, which is the point:
+
+```
+$ node dist/bin.js work run --work-units examples/example-plan.json
+factory: blocked — repair limit reached for PROJECT-001
+batches: [["PROJECT-001"]]
+  repair_exhausted PROJECT-001  verification=failed integration=blocked (verification_failed)
+                   repair attempts=2 repair_limit_reached_after_2_attempts
+```
+
+The matching event tail shows the full sequence — 16 event types across validation, scheduling,
+runtime selection, workspace and worktree creation, worker start and finish, verification, two repair
+attempts, escalation, and a blocked integration:
+
+```
+verification.started   {"checks":["npm-test"],"attempt":2}
+verification.failed    {"failed":["npm-test"],"attempt":2}
+repair.failed          {"attempt":2,"failedChecks":["npm-test"]}
+repair.escalated       {"attempts":2,"maxAttempts":2,"failedChecks":["npm-test"]}
+integration.blocked    {"verificationStatus":"failed","verificationAttempts":2,"reason":"verification_failed"}
+```
+
+The `fake` runtime creates a fictional worktree path, so `npm test` cannot run there. Verification
+fails twice, the loop stops at its bound, and integration blocks. `git worktree list` afterwards
+shows only the main checkout — the pipeline cleans up after itself, and a leftover worktree would be a
+real condition rather than routine residue.
 
 ## Failure containment
 

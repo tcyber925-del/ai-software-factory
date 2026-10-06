@@ -24,6 +24,19 @@ self-authorizing correctness.
 - **OpenCode** on `PATH`. Required to dispatch work.
 - **Herdr** is optional. It is a preferred supported runtime, *not* a mandatory
   dependency; its absence is a warning, never a blocking error.
+- **Hermes** is optional and unchecked. `factory doctor` does not report it, so
+  verify `hermes --version` yourself if you intend to use it.
+
+### If you use `factory verify`, define these scripts
+
+`factory verify` shells out to five `npm run` targets in order: `format:check`, `lint`, `typecheck`,
+`test`, `build`. Your adopting project must define the first three or the command exits `1` on the
+first one. The factory's own repository does not define them, which is why `npm run verify` is the
+working equivalent there and `factory verify` is not.
+
+Treat `format:check` and `lint` as required signals, not placeholders. A script that runs and reports
+success without checking anything turns the gate green without verifying anything, which is the exact
+failure this policy exists to prevent.
 
 Verify your environment:
 
@@ -141,16 +154,36 @@ inside the skill.
 - [ ] `.factory/policies/` reflects this project's real boundaries
 - [ ] At least one example Work Unit authored
 - [ ] `node dist/bin.js work validate` accepts it
+- [ ] If you will use `factory verify`: `format:check`, `lint`, and `typecheck` scripts defined and meaningful
 - [ ] No `node_modules/` or build output committed
 - [ ] Secrets supplied by environment, never committed
+
+## Two gaps to close in your own repository
+
+Neither is fixed for you, and neither is caught by `npm run verify`:
+
+1. **The security gate is not composed into `work run`.** `src/security/` implements risk
+   classification and the isolation gate, but `src/kernel/pipeline.ts` never calls it. Until you
+   compose it, `factory work run` will not refuse `untrusted` or `destructive` Work Units even though
+   no adapter offers the `sandbox` isolation they require. See
+   [security-policy.md](security-policy.md#not-enforced-at-dispatch).
+2. **`factory verify` will fail** until you define `format:check`, `lint`, and `typecheck`. See
+   [cli.md](cli.md).
+
+Both are library-versus-wiring gaps: the code exists and is tested, which is precisely why a green
+suite does not catch them.
 
 ## What the factory will not do for you
 
 - **It will not verify for you.** The gate is deterministic and reproducible;
   interpreting evidence and judging scope is still a human responsibility.
 - **It will not replace review.** A green `contract` run is necessary, not sufficient.
+- **It will not enforce a control it has not composed.** A green run proves the code that *is*
+  called behaves correctly. It says nothing about a control that exists but has no caller — the
+  security gate being the live example.
 - **It will not secure untrusted code.** A Git worktree is developer isolation.
-  Higher-risk execution needs stronger isolation (see `docs/security.md`).
+  Higher-risk execution needs stronger isolation (see `docs/security.md`), and today the refusal
+  is not applied at dispatch.
 - **It will not enforce anything you did not turn on.** Branch protection is
   repository configuration, not something the code can assert.
 

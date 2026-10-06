@@ -69,6 +69,23 @@ level it provides, and admission compares levels rather than checking for one sp
 container platform, remote execution service, or secrets manager is built here; this only defines the
 boundary such an adapter must satisfy.
 
+## Not enforced at dispatch
+
+This policy is implemented and tested, but it is not wired into the run path.
+
+`evaluateSecurityGate` has no caller in `src/kernel/pipeline.ts`, and no CLI command applies it. So
+the refusals described above — a `untrusted` Work Unit requiring `sandbox`, a direct push to a
+protected branch, a production credential request — are available to a caller that chooses to use the
+library, and are **not** currently applied by `factory work run`.
+
+That is the most consequential gap in the factory, and it is the one most likely to be misread. The
+policy above describes what the code *can* do; a reader who assumes `work run` applies it would
+believe higher-risk work is being refused when it is not. There is no sandbox adapter, so the
+`untrusted` refusal is the one that would actually fire.
+
+Composing the gate into the pipeline is a change to the run path and belongs in its own Work Unit.
+See [cli.md](cli.md#what-the-pipeline-does-not-compose) and [architecture.md](architecture.md).
+
 ## Auditability
 
 Every decision is a value, and every applied control produces a `SecurityDecisionRecord` recorded as a

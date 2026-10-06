@@ -45,6 +45,14 @@ Herdr and Hermes are preferred supported runtimes, not mandatory factory depende
 offers a runtime only when its binary is on `PATH`, and reports an unknown runtime name as an error
 rather than silently substituting another.
 
+### Doctor coverage is not the same as the runtime list
+
+The CLI offers all four; `factory doctor` checks two. `src/doctor/doctor.ts` declares `opencode` as
+required and `herdr` as optional, and has no entry for `hermes`. So `doctor` reports `healthy` on a
+machine with no Hermes while the CLI would offer it — the omission is in the diagnostic, not in
+dispatch. Documented in [doctor.md](doctor.md) so the runtime table above is not read as a claim that
+all four are verified before a run.
+
 ## Agent-native orchestration
 An agent may request bounded orchestration actions when policy permits. Such actions remain children of a parent Work Unit, are traceable, and cannot bypass verification or integration gates. The Hermes adapter is the shipped example: it can run checks, but its `capabilities()` deliberately exclude `verification`, and neither `VerificationResult` nor `IntegrationResult` is ever computed from its state.
 
@@ -69,6 +77,11 @@ No container or remote sandbox adapter ships today, which is why higher-risk wor
 rather than run weakly: `untrusted` and `destructive` Work Units require a `sandbox` isolation
 level, and no adapter offers one. See [security-policy.md](security-policy.md). Adding an adapter is
 therefore how that refusal would become a capability — not by loosening the gate.
+
+Two things about that refusal, stated plainly because the doc set would otherwise imply otherwise:
+the gate is not called by `factory work run`, and there is no sandbox adapter that could satisfy it
+even if it were. The refusal is reachable only through a caller that invokes
+`evaluateSecurityGate`. See [security-policy.md](security-policy.md#not-enforced-at-dispatch).
 
 
 ## Herdr adapter boundary

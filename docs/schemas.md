@@ -12,7 +12,18 @@ Current schemas:
 - execution-event.schema.json
 - conflict.schema.json
 
-Schemas are intentionally small during bootstrap. Implementation may extend them only through a reviewed protocol change.
+Schemas are intentionally small. Implementation may extend them only through a reviewed protocol change.
+
+`verification-result.schema.json` is the shipped name; the Reference Implementation Plan proposed
+`verification.schema.json`, renamed to match the `VerificationResult` protocol type.
+
+### Where the schema is read from
+
+The CLI resolves `schemas/work-unit.schema.json` relative to the **installed factory** first, walking
+up from `src/cli/index.ts` / `dist/cli/index.ts`, and only then falls back to the cwd. An adopting
+project does not ship the factory's schemas, so a cwd-only lookup would let `doctor` report a healthy
+environment and then fail at `work validate` — a check and an action disagreeing about where the
+contract lives. See [cli.md](cli.md).
 
 ## Correspondence with TypeScript
 Each schema is the snake_case wire form of a TypeScript type in `src/protocol.ts`. The two are kept in
