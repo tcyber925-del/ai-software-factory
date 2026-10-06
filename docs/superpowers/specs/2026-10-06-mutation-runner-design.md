@@ -1,8 +1,16 @@
 # Mutation runner — design
 
 Date: 2026-10-06
-Status: draft for review
-Relates to: the gap recorded in `docs/verification-and-merge-gates.md:18`
+Status: approved, ready for planning
+Source baseline: `17bc3a8` (includes #57)
+Relates to: the gap recorded at `docs/verification-and-merge-gates.md:16-18`
+
+### Note on line references
+
+This spec cites file and line anchors. Those were written against `3708b84`; #57 rewrote
+`README.md`, `cli.md`, `using-the-factory.md` and `verification-and-merge-gates.md`, so
+line numbers in `docs/` have shifted. Verify each anchor by reading the file before editing
+it — the quoted *text* is the reliable part, the line number is not.
 
 ## Problem
 
@@ -12,9 +20,14 @@ Relates to: the gap recorded in `docs/verification-and-merge-gates.md:18`
 > unit's tests were proven non-vacuous by deliberately weakening the implementation and
 > confirming the tests then failed.
 
-That is a claim about the 394 tests currently in `tests/`. Nothing in the repository
-enforces it, and nothing records which check caught which weakening. The claim is credible
-only because it was done by hand, once, by someone who then remembered to write it down.
+That is a claim about the test suite in `tests/`. Nothing in the repository enforces it, and
+nothing records which check caught which weakening. The claim is credible only because it was
+done by hand, once, by someone who then remembered to write it down.
+
+The suite size is deliberately not quoted here, and `main` no longer quotes it either. #57
+removed the hardcoded count for the same reason this spec must avoid it: a number in prose
+cannot be checked by a reader, and this project has published three different ones. The
+authoritative value is `npm run verify`.
 
 That is the same failure mode `coleam00/ai-software-factory` documents repeatedly in its
 incident log: a guarantee that exists as prose and not as a mechanism decays silently. The
@@ -35,8 +48,8 @@ attribution, and it is a separate subsystem. Tracked as follow-on work, not sile
 
 **Explicitly rejected.** An off-the-shelf mutation engine (Stryker and similar). It would be
 the first dependency in a project whose zero-dependency posture is a documented, reasoned
-decision held in two places (`src/kernel/json-schema.ts:10`, and the lockfile invariant in
-`docs/verification-and-merge-gates.md:113`). Exchanging that for exhaustive-but-unattributable
+decision held in two places (`src/kernel/json-schema.ts`, and the lockfile invariant in
+`docs/verification-and-merge-gates.md`). Exchanging that for exhaustive-but-unattributable
 coverage is a bad trade. The hand-authored corpus's blind spot — "only defects you thought of"
 — is bounded and visible, which a mutation *score* would hide behind a single number.
 
@@ -178,7 +191,8 @@ defect one level up:
 
 ## The corpus
 
-Each defect's anchor was read against the source at `3708b84` before being written down. Two
+Each defect's anchor was read against `src/` and verified unchanged by #57, which touched
+`README.md`, `docs/` and `tests/documentation.test.ts` but no `src/` file. Two
 initial candidates were rejected during that check, and the reasons generalise to the rest of
 the corpus.
 
