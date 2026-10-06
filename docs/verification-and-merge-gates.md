@@ -74,9 +74,43 @@ A verification record should identify:
 
 ## Current repository baseline
 
+Verified against the live repository at `0147484` (2026-10-06).
+
 The GitHub Actions workflow at `.github/workflows/ci.yml` is the deterministic contract gate. It runs on pull requests and pushes to `main`. The job is named `contract`, and that is the name branch protection requires.
 
-Dependencies are installed with `npm ci`, and `package-lock.json` has been byte-identical through every unit shipped so far: the factory has zero runtime dependencies and no devDependency has been added or upgraded.
+Branch protection on `main` is live and confirmed by the GitHub API, not merely documented:
+
+| Setting | Value |
+|---|---|
+| Required status checks | `contract`, strict (branch must be up to date) |
+| Required approvals | 0 |
+| Enforce on admins | **enabled** |
+| Allow force pushes | disabled |
+| Allow deletions | disabled |
+
+Zero approvals is deliberate: a single-maintainer repository would otherwise deadlock on its own
+gate. Enforce-on-admins is the setting that makes the gate real, since without it the rule is
+advisory for the only person who can merge.
+
+`npm run verify` is the local equivalent: `tsc --noEmit`, a CLI emit, and 301 tests across 20 files.
+
+`factory verify` is **not** the same gate and does not currently pass — it invokes `format:check`,
+`lint`, and `typecheck`, none of which this repository defines. See [cli.md](cli.md).
+
+## The gate is a floor, not a ceiling
+
+A green `contract` run is necessary and not sufficient, and the gap is worth being concrete about:
+the gate does not check whether a shipped control is *composed*. Two gaps in this repository pass CI
+cleanly because they are absence-of-a-caller, not absence-of-code:
+
+- `evaluateSecurityGate` is implemented and tested but never called from the pipeline, so higher-risk
+  work is not refused at dispatch;
+- the doctor does not check `hermes`.
+
+Neither is visible to a test suite that verifies what exists. Detecting them required reading the
+call graph. Treat this as the reason human review stays required even on a green run.
+
+Dependencies are installed with `npm ci`, and `package-lock.json` has been byte-identical through every unit shipped so far: the factory has zero runtime dependencies and no devDependency has been added or upgraded. Nineteen Work Units have shipped; numbering is not contiguous, and `FCT-014` merged from a branch named `FCT-021-security-hardening`.
 
 ## Dependency installation
 

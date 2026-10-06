@@ -104,6 +104,19 @@ covered when they are not:
   the missing block.
 - **ENG-905** — eligible status with a blocking label, proving labels are honoured.
 
+## Not reachable from the CLI
+
+This adapter is a library. No `factory` command reads Linear, calls `evaluateEligibility`, or emits
+`integration.status_proposed`. A caller assembles the flow.
+
+The `intake refused` message the pipeline can print is a different thing entirely: `runPipeline`
+reads `planSchedule` decisions, so it is reporting a Work Unit the *scheduler* blocked — an
+unsatisfied dependency, a missing capability, a cycle — not an issue Linear refused. Conflating the
+two would imply an intake path that does not exist.
+
+`fixtures/linear/` holds recorded payloads so the rules are tested offline, but nothing in `src/cli/`
+reads them.
+
 ## Boundary
 
 Linear is not replaced, and no product management is automated. No requirement change is ever

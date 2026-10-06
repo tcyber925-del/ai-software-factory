@@ -32,11 +32,11 @@ Approved specification
         ↓
 Work Unit  (declarative; capabilities, not providers)
         ↓
-Eligibility  (Linear intake — explicit allowlist, nothing inferred)
+Eligibility  (Linear intake — explicit allowlist, nothing inferred)   ← library, not composed
         ↓
-Security gate  (risk class → required isolation)
+Security gate  (risk class → required isolation)                      ← library, not composed
         ↓
-Scheduler  (batches, conflicts, dependencies)
+Scheduler  (batches, conflicts, dependencies)                         ← composed
         ↓
 Runtime Adapter
    ┌────┴───────────┐
@@ -48,18 +48,22 @@ Isolated Git worktree
         ↓
 Implementation
         ↓
-Independent verification  (against the executed worktree)
+Independent verification  (against the executed worktree)             ← composed
         ↓
-  ├─ failed → bounded repair → re-verify → escalate at the limit
+  ├─ failed → bounded repair → re-verify → escalate at the limit       ← composed
   ↓
-Integration gate  (ready only through passing verification)
+Integration gate  (ready only through passing verification)            ← composed
         ↓
-Durable event log  (reconstructable; runtime state ≠ factory state)
+Durable event log  (reconstructable; runtime state ≠ factory state)    ← composed
         ↓
-PR / human review
+PR / human review                                                      ← human-led
         ↓
-Release / observe / learn
+Release / observe / learn                                              ← human-led
 ```
+
+The annotations matter. Four boxes are marked *library, not composed* or *human-led* because they are shipped and documented but not on the CLI's dispatch path. `src/kernel/pipeline.ts` composes only the boxes marked *composed*. See [cli.md](cli.md).
+
+The most consequential annotation is the security gate. `src/security/` implements risk classification and admission, and `evaluateSecurityGate` returns one decision per control — but nothing in `src/kernel/pipeline.ts` calls it. A `untrusted` Work Unit is therefore **not** refused by `factory work run` today. The control exists and is tested; it is not applied at dispatch.
 
 ## The composition layer
 
@@ -79,6 +83,11 @@ method through which a runtime can report success: the contract has nowhere to p
 
 Shipped adapters: `fake`, `opencode`, `herdr`, `hermes`. Herdr and Hermes are supported but not
 mandatory.
+
+`factory doctor` reports `opencode` as required and `herdr` as optional. It does **not** check
+`hermes`, so a Hermes installation problem surfaces at dispatch rather than at diagnosis. The
+adapter is offered by the CLI whenever its binary is on `PATH`, which makes the omission a gap in
+the diagnostic rather than in dispatch.
 
 ## State invariant
 Runtime state and factory state are separate.
@@ -122,6 +131,10 @@ When uncertainty exists, serialize.
 Git worktrees prevent ordinary working-tree collisions but do not provide a security sandbox. A
 Work Unit classified `untrusted` or `destructive` is **refused** rather than run in one, because no
 shipped adapter offers the isolation it requires. See [security-policy.md](security-policy.md).
+
+The refusal logic is implemented in `src/security/risk.ts` and covered by `tests/security.test.ts`,
+but it is not on the composed path — see the annotation above. The policy is the intended state; the
+CLI does not yet enforce it.
 
 ## V1 boundary
 Local-first, no hosted control plane, no custom agent runtime, no database, no web dashboard, no

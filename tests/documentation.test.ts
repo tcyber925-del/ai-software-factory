@@ -29,6 +29,7 @@ const REQUIRED_DOCS = [
   "docs/repair.md",
   "docs/doctor.md",
   "docs/cli.md",
+  "docs/using-the-factory.md",
   "docs/licensing.md",
   "docs/security-policy.md",
   "docs/hermes-adapter.md",

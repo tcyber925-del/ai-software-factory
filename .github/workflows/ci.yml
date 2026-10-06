@@ -74,6 +74,7 @@ jobs:
           test -f docs/repair.md
           test -f docs/doctor.md
           test -f docs/cli.md
+          test -f docs/using-the-factory.md
           test -f docs/verification-and-merge-gates.md
           test -f docs/licensing.md
           test -f docs/security-policy.md

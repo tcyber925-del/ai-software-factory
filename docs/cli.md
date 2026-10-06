@@ -37,6 +37,29 @@ factory doctor
 Exit code is `0` only when the run reached `ready`. A blocked run, an unknown
 command, a missing file, and a bare `factory` all exit `1`.
 
+### `factory verify` is currently non-functional
+
+`factory verify` shells out to `npm run` for `format:check`, `lint`, `typecheck`,
+`test`, and `build`, in that order, stopping at the first failure. This repository
+defines only `build`, `build:cli`, `factory`, `test`, and `verify` — so
+`format:check` is missing and the command exits `1` before doing any work.
+
+```
+$ node dist/bin.js verify
+fail  npm run format:check
+$ echo $?
+1
+```
+
+There is no formatter, linter, or separate `typecheck` script in this repository;
+`npm run build` is the typecheck. `npm run verify` is the working equivalent. The
+gap is recorded rather than papered over by adding empty scripts that would report
+a green run without checking anything.
+
+The command is kept because it is the intended shape — a project-level verification
+entry point that an adopting repository fills in with its own `format:check`,
+`lint`, and `typecheck`. `docs/adoption.md` says which scripts an adopter must add.
+
 ## The pipeline
 
 ```
@@ -70,6 +93,36 @@ checkout. `tests/pipeline.test.ts` covers both, and replacing the target with
 
 `--verify-in repo` is the explicit opt-out, for the case where the factory is
 verifying its own checkout.
+
+### What the pipeline does not compose
+
+The pipeline is not the whole factory. Three shipped capabilities are library-only
+and are **not** invoked by `factory work run`:
+
+| Capability | Module | Who applies it |
+| --- | --- | --- |
+| Security gate: risk classification → required isolation | `src/security/` | The caller. Nothing in the CLI applies it |
+| Linear intake and status reflection | `src/adapters/linear/` | The caller. No CLI command reads Linear |
+| Hermes availability check | `src/doctor/` | Nobody — `doctor` reports `opencode` and `herdr` only |
+
+The security gap is the one with teeth. `docs/security-policy.md` states that
+`untrusted` and `destructive` work must be **refused** without `sandbox` isolation,
+and no adapter offers one. That refusal does not happen on the CLI path, because
+`evaluateSecurityGate` has no caller in `src/kernel/pipeline.ts`. The policy is
+implemented and tested; it is just not wired into dispatch.
+
+The `intakeBlocked` check in the pipeline is not Linear intake. It reads
+`planSchedule` decisions, so it reports a Work Unit the *scheduler* refused — an
+unsatisfied dependency or a missing capability — not an issue Linear refused.
+
+### Schema resolution
+
+The Work Unit schema is resolved relative to the installed factory first
+(`src/cli/index.ts` walks up from the module), falling back to the cwd. An adopting
+project does not ship the factory's `schemas/`, and `doctor` does not require it,
+so a cwd-only lookup would make `doctor` report a healthy environment and then fail
+the moment `work validate` ran. Check and action have to agree on where the contract
+lives.
 
 ## Scheduling semantics
 
@@ -145,7 +198,8 @@ both directions together is what makes the round trip checkable.
 ## No new dependencies
 
 Argument parsing is hand-rolled. The factory has added zero dependencies across
-sixteen units, and a CLI framework is not worth breaking that for.
+nineteen units, `package-lock.json` has been byte-identical throughout, and a CLI
+framework is not worth breaking that for.
 
 ## Build
 
@@ -153,8 +207,21 @@ sixteen units, and a CLI framework is not worth breaking that for.
 | --- | --- |
 | `npm run build` | `tsc --noEmit` — typecheck only |
 | `npm run build:cli` | `tsc -p tsconfig.build.json` — emit `dist/` for the `bin` |
+| `npm test` | `vitest run` — 301 tests across 20 files |
 | `npm run verify` | build, build:cli, test |
+
+Note that `npm run verify` and `factory verify` are different things: the first is
+the repository's own gate, the second shells out to per-project scripts and does not
+currently pass here.
 
 The repository typechecks with `noEmit`, so a runnable CLI needs a real emit
 target. `tsconfig.build.json` provides one for `src/` and excludes `tests/`.
 `dist/` is gitignored.
+
+## Build output and the trace
+
+`dist/bin.js` is the `bin` target. `.factory/events.jsonl` receives the run trace and
+is gitignored, so a clean clone starts with no history — the log is local evidence,
+not a committed artifact. `git worktree list` should show only the main checkout
+after a run; `work run` cleans up the worktrees it creates, and a leftover one is a
+real condition the reader should investigate rather than delete blindly.

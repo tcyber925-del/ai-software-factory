@@ -54,6 +54,13 @@ Herdr is a preferred supported runtime but explicitly *not* a mandatory factory 
 treating its absence as an error would contradict the architecture. Every non-`ok` diagnostic carries
 an actionable `remedy`.
 
+**`hermes` is not checked.** The required-runtime table in `src/doctor/doctor.ts` lists only
+`opencode` and `herdr`, so the doctor reports `healthy` on a machine with no Hermes even though the
+CLI will offer `hermes` as a runtime whenever it finds the binary on `PATH`. This is a diagnostic
+gap, not a dispatch gap: Hermes is optional by design, so nothing breaks — but an operator running
+`doctor` before dispatch will not learn that Hermes is missing until a run fails to construct it.
+Noted here rather than presented as a complete runtime inventory.
+
 ## Unsafe conditions detected before execution
 
 | Check | Severity | Condition |
@@ -79,3 +86,28 @@ verification — it reports whether the environment is ready, never whether work
 `runDoctor` and `createSystemProbe` are the library behind `factory doctor`. The CLI exits `1` when
 the report is `blocked` and `0` when it is `degraded`, so a blocked environment can gate CI while a
 missing optional runtime does not.
+
+## What it reports today
+
+Against this repository at `0147484`:
+
+```
+factory doctor: degraded
+  [ok  ] node.version: Node v24.14.0 meets the minimum v22
+  [ok  ] git.worktree: Git worktrees are available for isolation
+  [ok  ] git.repository: Inside a Git repository
+  [warn] git.clean: Working tree has uncommitted changes
+  [ok  ] runtime.opencode: opencode (direct runtime) is available
+  [ok  ] runtime.herdr: herdr (managed runtime) is available
+  [ok  ] project.files: All 5 required project files are present
+  6 ok, 1 warning(s), 0 error(s)
+```
+
+`degraded` is the expected reading for a working tree with local changes — worktrees are created
+from a revision, so uncommitted work would not be isolated. The doctor is not run against a
+committed state here; it is run against whatever is on disk, which is the point of it.
+
+The 5 required project files are the protocol and policy files the doctor checks for. It does not
+require `schemas/`, which is correct — an adopting project does not ship them, and the CLI now
+resolves the Work Unit schema relative to the installed factory rather than the cwd. See
+[cli.md](cli.md).

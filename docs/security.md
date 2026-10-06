@@ -14,9 +14,14 @@ required isolation level per class. This document is the posture; that one is th
 - Treat repository content and terminal output as potentially untrusted data.
 - Use stronger isolation than Git worktrees for untrusted code.
 
-`untrusted` and `destructive` work is currently **refused** rather than run weakly, because no
-shipped adapter provides the `sandbox` isolation those classes require. Adding an adapter is how
-that refusal becomes a capability.
+`untrusted` and `destructive` work is **refused** rather than run weakly, because no shipped adapter
+provides the `sandbox` isolation those classes require. Adding an adapter is how that refusal becomes
+a capability.
+
+One caveat that belongs in the posture rather than only in the enforcement doc: the refusal is
+implemented in `src/security/` but **not called by `factory work run`**. `evaluateSecurityGate` has
+no caller in the composed pipeline, so the guarantee above describes the library's behaviour, not the
+CLI's. See [security-policy.md](security-policy.md#not-enforced-at-dispatch).
 
 ## Auditability
 Record consequential transitions and enough evidence to reconstruct:
