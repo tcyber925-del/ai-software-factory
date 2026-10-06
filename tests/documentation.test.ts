@@ -213,6 +213,15 @@ describe("the adoption guide cannot ship a broken starting point", () => {
     expect(read("docs/adoption.md")).toMatch(/tests \*\*the factory\*\*/);
   });
 
+  it("records why the factory is not installable from npm", () => {
+    // `"private": true` plus a `bin` entry looks like an oversight unless the
+    // decision is written down. It is the difference between a template and a
+    // half-finished package.
+    const licensing = read("docs/licensing.md");
+    expect(licensing).toMatch(/Distribution: a template, not a package/);
+    expect(licensing).toMatch(/private/);
+  });
+
   it("says the same thing in the template's own README", () => {
     // The README is what an adopter reads after cloning, before the guide.
     const template = read("templates/project/README.md");

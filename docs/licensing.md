@@ -26,6 +26,30 @@ valuable for a foundation-scale project, but it also adds a NOTICE-file obligati
 friction for someone copying a template into a new repository. That trade was not worth it at this
 stage.
 
+## Distribution: a template, not a package
+
+`package.json` carries `"private": true` and a `bin` entry. Together those mean the
+factory **cannot be installed from npm**, by design rather than by oversight.
+
+The decision is to distribute as a GitHub template and by cloning. Three reasons:
+
+1. **It is a set of contracts, not a library.** The valuable parts are `AGENTS.md`, the
+   policies, the skills, and the schemas. Those belong in your repository, versioned
+   with your code, not resolved from a registry where they can drift from what you
+   audited.
+2. **Adoption should be inspectable.** Cloning shows exactly what you are taking. An
+   `npm install` hides it.
+3. **The CLI is a local tool.** It dispatches agents on your machine, against your
+   repositories, with your credentials. There is nothing here that benefits from being
+   in a shared registry, and a supply-chain surface that could serve modified code to
+   everyone who adopts it.
+
+`private: true` is what makes this enforceable: npm refuses to publish it, so the
+decision cannot be quietly reversed by a stray `npm publish`.
+
+**If you want the CLI**, vendor it — keep `src/` and add the `build:cli` script as
+described in [`adoption.md`](adoption.md).
+
 ## Changing the license
 
 The license is a founder decision and it was delegated to the implementing agent for this step.
