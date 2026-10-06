@@ -56,6 +56,20 @@ all four are verified before a run.
 ## Agent-native orchestration
 An agent may request bounded orchestration actions when policy permits. Such actions remain children of a parent Work Unit, are traceable, and cannot bypass verification or integration gates. The Hermes adapter is the shipped example: it can run checks, but its `capabilities()` deliberately exclude `verification`, and neither `VerificationResult` nor `IntegrationResult` is ever computed from its state.
 
+## Subprocess output goes to a file, never a pipe
+
+`defaultCommandRunner` redirects a child's stdout and stderr to temporary files and
+reads them after exit. That is not incidental.
+
+Measured against `opencode run` with a demanding prompt: with stdout on a **pipe**
+the child hung until the timeout ceiling; the identical command with stdout on a
+**file** completed in 115s. A `sh -c` wrapper that still ended in a pipe hung too,
+so it is the pipe itself and not the spawning style.
+
+Two consequences beyond the hang: a file has no output ceiling, so a long agent
+transcript cannot exhaust a buffer, and the temporary files are removed whether the
+command succeeded, failed, or timed out.
+
 ## Every call is bounded
 
 No shipped adapter may wait indefinitely on a process. `opencode run` is a

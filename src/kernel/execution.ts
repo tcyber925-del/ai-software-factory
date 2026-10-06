@@ -54,6 +54,15 @@ export interface ExecuteWorkUnitOptions {
   baseRevision?: string;
   /** When provided, factory and runtime events are persisted durably as they occur. */
   eventLog?: EventLog;
+  /**
+   * Whether to remove the workspace when execution finishes. Defaults to `true`.
+   *
+   * Set `false` when the caller still needs the executed tree afterwards. The
+   * pipeline does exactly this: independent verification reads the worktree the
+   * agent produced, so cleaning up inside this call would destroy the very thing
+   * about to be verified. The caller then becomes responsible for cleanup.
+   */
+  cleanup?: boolean;
   /** Correlates every event from this execution attempt. */
   runId?: string;
   /** Set when this attempt was spawned by another, e.g. a repair. */
@@ -190,7 +199,7 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
   } finally {
     // Cleanup is best-effort: a cleanup failure must not erase the record of
     // what happened during execution.
-    if (workspace !== undefined) {
+    if (workspace !== undefined && options.cleanup !== false) {
       try {
         await runtime.cleanupWorkspace(workspace);
         emit("workspace.cleaned", { workspaceId: workspace.id });

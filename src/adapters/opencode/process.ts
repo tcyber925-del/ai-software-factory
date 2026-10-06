@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { spawn } from "node:child_process";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * Default ceiling for a runtime subprocess.
@@ -24,39 +24,72 @@ export interface CommandOptions {
 export interface CommandResult { stdout: string; stderr: string; }
 export interface CommandRunner { run(command: string, args: string[], cwd: string, options?: CommandOptions): Promise<CommandResult>; }
 
+/**
+ * Runs a subprocess with stdout and stderr redirected to temporary files.
+ *
+ * **Not a pipe, and that is load-bearing.** A runtime agent streaming progress to
+ * stdout deadlocks when its output is a pipe. Measured against `opencode run` with a
+ * demanding prompt: pipe-to-parent hung until the 150s ceiling, the same command with
+ * stdout on a file completed in 115s. A `sh -c` wrapper that still ended in a pipe
+ * hung too, so it is the pipe itself and not the spawning style.
+ *
+ * Files sidestep that entirely, and remove any output-size ceiling — `execFile`'s
+ * `maxBuffer` would otherwise fail a long agent transcript.
+ */
 export const defaultCommandRunner: CommandRunner = {
   async run(command, args, cwd, options) {
     const timeoutMs = options?.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    const dir = mkdtempSync(join(tmpdir(), "factory-cmd-"));
+    const stdoutPath = join(dir, "stdout");
+    const stderrPath = join(dir, "stderr");
+    const stdoutFd = openSync(stdoutPath, "w");
+    const stderrFd = openSync(stderrPath, "w");
+
     try {
-      return await execFileAsync(command, args, {
-        cwd,
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: timeoutMs,
-        // SIGTERM can be ignored by a wedged child, leaving the timeout useless.
-        killSignal: "SIGKILL",
+      return await new Promise<CommandResult>((resolve, reject) => {
+        const child = spawn(command, args, { cwd, stdio: ["ignore", stdoutFd, stderrFd] });
+        let timedOut = false;
+        let settled = false;
+
+        const timer = setTimeout(() => {
+          timedOut = true;
+          // SIGTERM can be ignored by a wedged child, leaving the timeout useless.
+          child.kill("SIGKILL");
+        }, timeoutMs);
+        // The timer must not hold the event loop open once the child has exited.
+        timer.unref?.();
+
+        const finish = (action: () => void): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          action();
+        };
+
+        child.on("error", (error) => finish(() => reject(error)));
+        child.on("close", (code, signal) => {
+          finish(() => {
+            if (timedOut) {
+              // The wording matters: `#mapFailure` and `asRuntimeFailure` classify from
+              // the message, so a timeout must be identifiable without inspecting
+              // process properties at three separate call sites.
+              reject(new Error(`timed out after ${timeoutMs}ms: ${command} ${args[0] ?? ""}`.trim()));
+              return;
+            }
+            const stdout = readFileSync(stdoutPath, "utf8");
+            const stderr = readFileSync(stderrPath, "utf8");
+            if (code !== 0) {
+              reject(new Error(`exited ${code ?? signal ?? "unknown"}: ${command} ${args[0] ?? ""}`.trim()));
+              return;
+            }
+            resolve({ stdout, stderr });
+          });
+        });
       });
-    } catch (error) {
-      if (isTimeout(error)) {
-        // The wording matters: `#mapFailure` and `asRuntimeFailure` both classify
-        // from the message, so a timeout must be identifiable without inspecting
-        // Node's error properties at three call sites.
-        throw new Error(`timed out after ${timeoutMs}ms: ${command} ${args[0] ?? ""}`.trim(), { cause: error });
-      }
-      throw error;
+    } finally {
+      closeSync(stdoutFd);
+      closeSync(stderrFd);
+      rmSync(dir, { recursive: true, force: true });
     }
   },
 };
-
-/**
- * Distinguishes "exceeded the timeout" from "exited non-zero".
- *
- * Node signals the former by killing the child, so `killed` is set and `signal` is
- * the kill signal. A command that fails on its own is never killed, so this cannot
- * be confused with an ordinary failure.
- */
-function isTimeout(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as { killed?: unknown; signal?: unknown; code?: unknown };
-  if (candidate.code === "ETIMEDOUT") return true;
-  return candidate.killed === true && typeof candidate.signal === "string";
-}

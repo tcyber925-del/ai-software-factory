@@ -109,7 +109,7 @@ covered when they are not:
 This adapter is a library. No `factory` command reads Linear, calls `evaluateEligibility`, or emits
 `integration.status_proposed`. A caller assembles the flow.
 
-The `intake refused` message the pipeline can print is a different thing entirely: `runPipeline`
+The `scheduler blocked` message the pipeline can print is a different thing entirely: `runPipeline`
 reads `planSchedule` decisions, so it is reporting a Work Unit the *scheduler* blocked — an
 unsatisfied dependency, a missing capability, a cycle — not an issue Linear refused. Conflating the
 two would imply an intake path that does not exist.
