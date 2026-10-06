@@ -18,7 +18,7 @@ import type { LabelledRuntime } from "../kernel/work-unit.js";
 import type { ShellCheckSpec } from "../adapters/verification/shell.js";
 import type { ScheduledWorkUnit } from "../kernel/scheduler.js";
 import type { CliDependencies, CommandOutput, ParsedArgs } from "./args.js";
-import { USAGE, parseArgs, readWorkUnitFile, selectRuntimes } from "./args.js";
+import { USAGE, parseArgs, readChecksFile, readWorkUnitFile, selectRuntimes } from "./args.js";
 
 /**
  * Command dispatch.
@@ -145,7 +145,15 @@ async function workRun(args: ParsedArgs, context: RunContext): Promise<CommandOu
   const schema = loadSchema();
   const cwd = context.cwd;
   const runtimes = selectRuntimes(availableRuntimes(cwd), args.flags.get("runtime"));
-  const checks: ShellCheckSpec[] = [{ name: "npm-test", command: "npm", args: ["test"] }];
+  // The default suits npm projects, which is what the templates ship. Anything else
+  // supplies its own checks, because a verification command the project does not
+  // recognise can only ever fail — and a check that cannot pass is indistinguishable
+  // from a check that found a problem.
+  const checksPath = args.flags.get("checks");
+  const checks: ShellCheckSpec[] =
+    checksPath === undefined
+      ? [{ name: "npm-test", command: "npm", args: ["test"] }]
+      : readChecksFile(checksPath);
   const eventLog = new JsonlEventLog(join(cwd, ".factory/events.jsonl"));
 
   const maxParallelRaw = args.flags.get("max-parallel");
@@ -194,10 +202,71 @@ function workValidate(args: ParsedArgs, context: RunContext): CommandOutput {
   return { exitCode: invalid === 0 ? 0 : 1, lines };
 }
 
+/**
+ * Deterministic verification steps, in the order they should run.
+ *
+ * `verify` is last so a project that defines it — which is what CI runs — gets the
+ * whole contract exactly as CI sees it, rather than a reconstruction of it.
+ */
+const VERIFY_STEPS = ["format:check", "lint", "typecheck", "test", "build", "verify"] as const;
+
+/**
+ * Runs the project's own deterministic checks.
+ *
+ * The steps are read from the target project's `package.json` rather than assumed.
+ * The previous version invoked a fixed list including `format:check`, `lint`, and
+ * `typecheck`, which this repository does not define — so `factory verify` always
+ * failed on a factory that is itself green. A verification command the project does
+ * not recognise can only ever fail, and a command that cannot pass is
+ * indistinguishable from one that found a problem.
+ *
+ * A project that declares none of the steps is a **failure**, not a pass. "Nothing
+ * was verified" must never be reported as "verification passed".
+ */
 async function factoryVerify(context: RunContext): Promise<CommandOutput> {
   const run = promisify(execFile);
   const lines: string[] = [];
-  for (const step of ["format:check", "lint", "typecheck", "test", "build"]) {
+
+  let scripts: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(context.cwd, "package.json"), "utf8"));
+    if (typeof parsed === "object" && parsed !== null) {
+      const candidate = (parsed as Record<string, unknown>)["scripts"];
+      if (typeof candidate === "object" && candidate !== null) {
+        scripts = candidate as Record<string, unknown>;
+      }
+    }
+  } catch {
+    lines.push("fail  no readable package.json — cannot determine this project's checks");
+    return { exitCode: 1, lines };
+  }
+
+  // `verify` is the project's own aggregate contract — it is what its CI runs. When
+  // it exists, run it *alone*: a `verify` script that already chains `test` would
+  // otherwise run the whole suite twice, and a slow check that times out reads as a
+  // verification failure.
+  if (typeof scripts["verify"] === "string") {
+    try {
+      await run("npm", ["run", "verify"], { cwd: context.cwd, maxBuffer: 32 * 1024 * 1024 });
+      lines.push("ok    npm run verify");
+      lines.push("verification passed (1 step).");
+      return { exitCode: 0, lines };
+    } catch {
+      lines.push("fail  npm run verify");
+      return { exitCode: 1, lines };
+    }
+  }
+
+  const present = VERIFY_STEPS.filter((step) => typeof scripts[step] === "string");
+  const absent = VERIFY_STEPS.filter((step) => typeof scripts[step] !== "string");
+
+  if (present.length === 0) {
+    lines.push("fail  package.json declares none of: " + VERIFY_STEPS.join(", "));
+    lines.push("      Declare at least one deterministic check, or the factory cannot verify anything.");
+    return { exitCode: 1, lines };
+  }
+
+  for (const step of present) {
     try {
       await run("npm", ["run", step], { cwd: context.cwd, maxBuffer: 32 * 1024 * 1024 });
       lines.push(`ok    npm run ${step}`);
@@ -206,7 +275,11 @@ async function factoryVerify(context: RunContext): Promise<CommandOutput> {
       return { exitCode: 1, lines };
     }
   }
-  lines.push("verification passed.");
+
+  if (absent.length > 0) {
+    lines.push(`skip  not declared by this project: ${absent.join(", ")}`);
+  }
+  lines.push(`verification passed (${present.length} step${present.length === 1 ? "" : "s"}).`);
   return { exitCode: 0, lines };
 }
 

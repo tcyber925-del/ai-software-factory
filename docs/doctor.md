@@ -49,17 +49,16 @@ This distinction is the point of the doctor, and it follows the documented polic
 |---|---|---|
 | `opencode` (direct) | yes | `error` — dispatch is blocked |
 | `herdr` (managed) | **no** | `warning` — degraded, dispatch still allowed |
+| `hermes` (managed) | **no** | `warning` — degraded, dispatch still allowed |
 
 Herdr is a preferred supported runtime but explicitly *not* a mandatory factory dependency, so
 treating its absence as an error would contradict the architecture. Every non-`ok` diagnostic carries
 an actionable `remedy`.
 
-**`hermes` is not checked.** The required-runtime table in `src/doctor/doctor.ts` lists only
-`opencode` and `herdr`, so the doctor reports `healthy` on a machine with no Hermes even though the
-CLI will offer `hermes` as a runtime whenever it finds the binary on `PATH`. This is a diagnostic
-gap, not a dispatch gap: Hermes is optional by design, so nothing breaks — but an operator running
-`doctor` before dispatch will not learn that Hermes is missing until a run fails to construct it.
-Noted here rather than presented as a complete runtime inventory.
+`hermes` is listed as an **optional** requirement. It is checked because the CLI offers any runtime
+whose binary is on `PATH`, so without the check a broken Hermes would surface mid-dispatch — after a
+worktree was created and an agent started. Optional means an absent Hermes is a warning, never a
+blocker: Hermes remains a preferred supported runtime, not a dependency.
 
 ## Unsafe conditions detected before execution
 

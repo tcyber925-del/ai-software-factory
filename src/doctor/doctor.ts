@@ -55,6 +55,11 @@ export interface RequiredRuntime {
 export const RUNTIME_REQUIREMENTS: RequiredRuntime[] = [
   { name: "opencode", required: true, role: "direct runtime" },
   { name: "herdr", required: false, role: "managed runtime" },
+  // Hermes is offered by the CLI whenever its binary is on PATH, so a broken
+  // installation surfaces mid-dispatch instead of at diagnosis. Listing it as an
+  // optional requirement means an absent Hermes stays a warning, while a *present*
+  // but unhealthy one is reported before dispatch rather than during it.
+  { name: "hermes", required: false, role: "managed runtime" },
 ];
 
 export const MINIMUM_NODE_MAJOR = 22;

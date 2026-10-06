@@ -85,6 +85,35 @@ describe("optional runtimes are distinguished from required ones", () => {
     expect(RUNTIME_REQUIREMENTS.find((r) => r.name === "herdr")?.required).toBe(false);
     expect(RUNTIME_REQUIREMENTS.find((r) => r.name === "opencode")?.required).toBe(true);
   });
+
+  it("checks Hermes, so a broken install is diagnosed before dispatch", () => {
+    // The CLI offers any runtime whose binary is on PATH, including Hermes. If the
+    // doctor did not check it, a broken Hermes surfaced mid-dispatch — after a
+    // worktree was created and an agent was started.
+    expect(RUNTIME_REQUIREMENTS.find((r) => r.name === "hermes")?.required).toBe(false);
+  });
+
+  it("reports an unavailable optional runtime as a warning, not a blocker", async () => {
+    const report = await runDoctor({ probe: probeWith({ runtimeAvailability: async () => ({ available: false }) }) });
+    const hermes = report.diagnostics.find((diagnostic) => diagnostic.id === "runtime.hermes");
+    expect(hermes?.severity).toBe("warning");
+    // Absent Hermes must never make the environment unusable.
+    expect(report.diagnostics.find((diagnostic) => diagnostic.id === "runtime.hermes")?.severity).not.toBe("error");
+  });
+
+  it("diagnoses a present but unhealthy Hermes", async () => {
+    // The distinction that matters: Hermes absent is fine, Hermes installed and
+    // broken is worth saying so before a Work Unit is dispatched into it.
+    const report = await runDoctor({
+      probe: probeWith({
+        runtimeAvailability: async (name: string) =>
+          name === "hermes" ? { available: false } : { available: true },
+      }),
+    });
+    const hermes = report.diagnostics.find((diagnostic) => diagnostic.id === "runtime.hermes");
+    expect(hermes?.severity).toBe("warning");
+    expect(hermes?.summary).toContain("hermes");
+  });
 });
 
 describe("prerequisites", () => {

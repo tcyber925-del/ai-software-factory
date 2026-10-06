@@ -251,25 +251,29 @@ The three required files are a contract, not documentation:
 
 ## 5. Tell the factory how you verify
 
-This is the step people miss, and it is the one that matters most.
+This is the step people miss, and it decides whether a Work Unit can ever pass.
 
-**V1 hardcodes the verification check to `npm test`.** There is no flag to change it.
-So:
+By default the factory runs `npm test`. If your project uses that, you are done.
 
-- **If your repo runs `npm test`**, you are done — nothing to do.
-- **If it does not**, `work run` will run `npm test` in the worktree, which will
-  fail or do nothing useful. Add a `test` script to `package.json` that runs your
-  real suite:
+If it does not, supply your own checks:
 
-```jsonc
-{ "scripts": { "test": "pytest -q" } }        // Python
-{ "scripts": { "test": "go test ./..." } }    // Go
-{ "scripts": { "test": "cargo test" } }       // Rust
+```bash
+cat > checks.json <<'JSON'
+[{ "name": "pytest", "command": "pytest", "args": ["-q"] }]
+JSON
+
+node dist/bin.js work run \
+  --work-units docs/work-units/LEGACY-001.plan.json \
+  --checks checks.json
 ```
 
-**Verified limitation:** a brownfield repo whose tests run under `npm test`
-(`node --test`) works end to end with no changes. A repo that does not needs this
-shim, or the pipeline.
+Checks run **inside the worktree the agent produced**, so they test what was written
+rather than what was already there.
+
+An empty list is refused. `[]` would mean "pass", because nothing failed — which is
+exactly the outcome independent verification exists to prevent.
+
+Commit `checks.json` so the whole team verifies the same way.
 
 ## 6. Write Work Units against your real surface
 
@@ -410,12 +414,16 @@ produced no execution evidence at all.
 
 ## The suite
 
-Use `npm run verify`, **not** `factory verify`. The latter invokes `format:check`,
-`lint`, and `typecheck`, which this repository does not define, so it always fails.
-
 ```bash
-npm run verify
+npm run verify          # the repository's own contract, identical to CI
+node dist/bin.js verify # the same, through the CLI
 ```
+
+`factory verify` runs the target project's `verify` script when it declares one —
+which is what its own CI runs — and otherwise runs the individual steps it does
+declare (`format:check`, `lint`, `typecheck`, `test`, `build`), naming the ones it
+skipped. A project declaring none of them is a **failure**, never a pass: nothing
+verified must never be reported as verification passed.
 
 That is exactly what CI runs: typecheck, build the CLI, smoke-run it, run the tests.
 **Expected: 301 tests across 20 files.**
@@ -460,13 +468,11 @@ Read these before you rely on the factory.
 
 | Limitation | Impact |
 |---|---|
-| **Verification is hardcoded to `npm test`** | Repos verifying with anything else need the `package.json` shim described above |
 | **No SCM adapter** | The factory never opens a PR or pushes a branch. You close the loop |
 | **`init`, `work create`, `work status`, `workspace list` are not implemented** | The specified CLI surface is narrower than documented in the plan |
 | **The security gate is not on the dispatch path** | `src/security/` classifies risk and would refuse `untrusted`/`destructive` work, but `work run` never calls it. **Such work currently runs.** See below |
 | **Linear intake is not on the dispatch path** | `src/adapters/linear/` ships and is tested, but no CLI command reads it. Use the library directly |
-| **`factory verify` is unusable** | It invokes `format:check`, `lint`, and `typecheck`; this repository defines none, so it always fails. Use `npm run verify` |
-| **`factory doctor` omits `hermes`** | Reports `opencode` and `herdr` only, so a Hermes problem surfaces at dispatch, not diagnosis |
+| **`factory verify` only knows npm scripts** | It runs the project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |
 | **`docs/architecture.md` is not checked for truth** | `doctor` verifies presence, not accuracy. You own this |
 | **Nested dispatch is refused** | Dispatch from the primary repository root, not from a worktree |
 
