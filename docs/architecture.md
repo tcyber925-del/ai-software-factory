@@ -84,10 +84,10 @@ method through which a runtime can report success: the contract has nowhere to p
 Shipped adapters: `fake`, `opencode`, `herdr`, `hermes`. Herdr and Hermes are supported but not
 mandatory.
 
-`factory doctor` reports `opencode` as required and `herdr` as optional. It does **not** check
-`hermes`, so a Hermes installation problem surfaces at dispatch rather than at diagnosis. The
-adapter is offered by the CLI whenever its binary is on `PATH`, which makes the omission a gap in
-the diagnostic rather than in dispatch.
+`factory doctor` reports `opencode` as required, and `herdr` and `hermes` as optional. Hermes is
+checked because the CLI offers it whenever its binary is on `PATH`; without the check, a broken
+install would surface mid-dispatch — after a worktree was created and an agent started. Optional
+means an *absent* runtime is a warning, never a blocker.
 
 ## State invariant
 Runtime state and factory state are separate.

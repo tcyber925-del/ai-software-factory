@@ -10,7 +10,7 @@ import type { EventLog } from "../state/event-log.js";
  * Minimal command-line surface.
  *
  * Argument parsing is hand-rolled and dependency-free on purpose: the factory has
- * added zero dependencies across fifteen units, and a CLI framework is not worth
+ * added zero dependencies across seventeen units, and a CLI framework is not worth
  * breaking that for. It also keeps the trust boundary visible — nothing here can
  * execute a command it was not given.
  */
@@ -76,6 +76,7 @@ export const USAGE = [
   "",
   "Flags:",
   "  --work-units <path>   Plan: array of { workUnit, dependsOn?, paths?, contracts? }",
+  "  --checks <path>       JSON array of { name, command, args? }; default is npm test",
   "  --runtime <name>      Restrict dispatch to one runtime by name",
   "  --max-parallel <n>    Bound concurrency inside one batch",
   "  --verify-in <where>   'worktree' (default, verifies the executed tree) or 'repo'",
@@ -85,11 +86,56 @@ export const USAGE = [
 ].join("\n");
 
 /**
- * Reads a work-unit file. The shape is deliberately flat and provider-neutral:
- * a Work Unit plus the scheduling facts, which is what the scheduler needs.
+ * Reads a checks file: the deterministic commands that prove a Work Unit correct.
+ *
+ * Read and validated rather than cast. These are commands the factory will execute
+ * inside a worktree, so a malformed or empty entry is a refusal, not something to
+ * discover at dispatch time.
+ *
+ * An empty array is rejected deliberately. "Pass verification" with no checks would
+ * mean a Work Unit is ready because nothing was run, which is exactly the failure
+ * mode independent verification exists to prevent.
  */
+export function readChecksFile(path: string): ShellCheckSpec[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new Error(`${path}: not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${path}: expected a JSON array of checks`);
+  }
+  if (parsed.length === 0) {
+    throw new Error(`${path}: at least one check is required; an empty list would pass everything`);
+  }
+
+  return parsed.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      throw new Error(`${path}[${index}]: expected an object`);
+    }
+    const record = entry as Record<string, unknown>;
+    const name = record["name"];
+    const command = record["command"];
+    if (typeof name !== "string" || name === "") {
+      throw new Error(`${path}[${index}]: 'name' must be a non-empty string`);
+    }
+    if (typeof command !== "string" || command === "") {
+      throw new Error(`${path}[${index}]: 'command' must be a non-empty string`);
+    }
+    const args = record["args"];
+    if (args !== undefined && (!Array.isArray(args) || args.some((value) => typeof value !== "string"))) {
+      throw new Error(`${path}[${index}]: 'args' must be an array of strings`);
+    }
+
+    const check: ShellCheckSpec = { name, command };
+    if (args !== undefined) check.args = [...(args as string[])];
+    return check;
+  });
+}
+
 /**
- * Reads the work-unit file.
+ * Reads a work-unit file.
  *
  * The file is the published wire contract — snake_case, matching
  * `schemas/work-unit.schema.json` — so it is parsed through

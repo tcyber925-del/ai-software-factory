@@ -34,7 +34,6 @@ Shipped as libraries, **not** called by `work run`:
 |---|---|---|
 | Security risk classification and the isolation gate | `src/security/` | A `untrusted` or `destructive` Work Unit is **not** refused at dispatch today; the caller must apply `evaluateSecurityGate` itself |
 | Linear intake and status reflection | `src/adapters/linear/` | No CLI command reads Linear; intake is a library call |
-| `hermes` availability check | `src/doctor/` | `factory doctor` reports `opencode` and `herdr` only, so a missing Hermes is invisible until dispatch |
 
 `docs/security-policy.md` and `docs/linear-adapter.md` document the intended behaviour. This table
 records what the CLI actually does.
@@ -223,10 +222,10 @@ shipped code.
 
 | Divergence | Detail |
 |---|---|
-| `factory verify` is unusable here | It invokes `format:check`, `lint`, and `typecheck`; this repository defines none of them |
+| `factory verify` is narrow | It runs the target project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |
+| Verification defaults to `npm test` | A project verifying another way passes `--checks <file.json>`; an empty list is refused |
 | Security gate is not composed | `src/security/` is never called from `src/kernel/pipeline.ts`, so higher-risk work is not refused at dispatch |
 | Linear intake is not composed | `src/adapters/linear/` has no CLI command; the "intake refused" path in the pipeline reads scheduler decisions |
-| `doctor` omits `hermes` | Reported runtimes are `opencode` (required) and `herdr` (optional) only |
 | CLI surface is narrower than the plan | Implemented: `work run`, `work validate`, `verify`, `doctor`. Not implemented: `init`, `work create`, `work status`, `workspace list` |
 | No SCM adapter | PR creation and merge stay human-led; the factory records the decision only |
 | No sandbox adapter | Nothing offers `sandbox` isolation, so `untrusted` and `destructive` work would be refused — if the gate were applied |

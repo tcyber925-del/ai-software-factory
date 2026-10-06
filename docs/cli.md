@@ -96,14 +96,14 @@ verifying its own checkout.
 
 ### What the pipeline does not compose
 
-The pipeline is not the whole factory. Three shipped capabilities are library-only
+The pipeline is not the whole factory. Two shipped capabilities are library-only
 and are **not** invoked by `factory work run`:
 
 | Capability | Module | Who applies it |
 | --- | --- | --- |
 | Security gate: risk classification → required isolation | `src/security/` | The caller. Nothing in the CLI applies it |
 | Linear intake and status reflection | `src/adapters/linear/` | The caller. No CLI command reads Linear |
-| Hermes availability check | `src/doctor/` | Nobody — `doctor` reports `opencode` and `herdr` only |
+
 
 The security gap is the one with teeth. `docs/security-policy.md` states that
 `untrusted` and `destructive` work must be **refused** without `sandbox` isolation,
