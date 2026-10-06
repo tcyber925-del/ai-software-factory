@@ -87,9 +87,13 @@ function blockingReason(execution: ExecutionRecord, verification: VerificationRe
   if (verification.workUnitId !== execution.workUnitId) {
     return "verification_work_unit_mismatch";
   }
-  if (verification.status === "blocked") return "verification_blocked";
-  if (verification.status !== "passed") return "verification_failed";
+  // The runtime failure is checked first because it is the *cause* of a failed
+  // check, not a co-equal one. Reporting `verification_failed` for a run whose
+  // runtime timed out points the operator at their tests rather than at the thing
+  // that actually stopped the work.
   if (execution.status === "blocked") return `execution_${execution.failure ?? "blocked"}`;
   if (execution.status === "failed") return `execution_${execution.failure ?? "failed"}`;
+  if (verification.status === "blocked") return "verification_blocked";
+  if (verification.status !== "passed") return "verification_failed";
   return undefined;
 }

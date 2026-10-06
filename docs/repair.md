@@ -39,6 +39,29 @@ initial verification
 The loop stops as soon as a repair verifies, so a first-attempt success never burns the remaining
 budget.
 
+## What repair is *not* for
+
+Repair fixes failing checks against **completed** work. It is not a retry mechanism.
+
+When the runtime never completed — timed out, failed to start, could not be reached — the failed
+check is a *symptom* of that, not a cause. Re-issuing the same prompt to the same runtime
+re-encounters the same fault, at the cost of a full prompt ceiling per attempt. A timing-out runtime
+was measured dispatching **three** times and creating **three** worktrees before escalating: the
+entire repair budget spent on an outcome that was knowable after the first attempt.
+
+So the pipeline runs verification either way — partial work may have landed, and that evidence is
+worth keeping — but enters the repair loop only when `execution.status === "completed"`. A skipped
+repair is recorded as `repair_not_attempted_runtime_<failure>` rather than silently omitted.
+
+The blocking reason names the runtime failure (`execution_timeout`) rather than `verification_failed`,
+because the runtime failure is the cause and a failed check is the consequence. Sending an operator to
+their test suite when the runtime never ran is the wrong door.
+
+**What this does not add:** retry with backoff for transient failures. A binary that reappears, or a
+provider that recovers, might genuinely succeed on a second attempt — but that needs evidence about
+which failures are actually transient, which V1 does not have. Guessing would trade a known cost for
+an unknown one.
+
 ## Escalation
 
 Reaching the limit does not mean the work succeeded. The result is `status: "escalated"` with

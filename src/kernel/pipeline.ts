@@ -324,7 +324,19 @@ async function runOne(
   let repairAttempts: number | undefined;
   let repairReason: string | undefined;
 
-  if (verification.status !== "passed") {
+  /**
+   * Repair fixes failing checks against *completed* work.
+   *
+   * When the runtime never completed, the failed check is a symptom of that rather
+   * than a cause, and re-issuing the same prompt to the same runtime re-encounters
+   * the same fault — at the cost of a full prompt ceiling per attempt. A timing-out
+   * runtime was measured dispatching three times and creating three worktrees before
+   * escalating, which is the budget spent on a known-failed outcome.
+   *
+   * Verification still runs either way: partial work may have landed, and that
+   * evidence is worth keeping. Only the repair loop is skipped.
+   */
+  if (verification.status !== "passed" && execution.status === "completed") {
     const repair = await runRepairLoop({
       workUnit,
       initialVerification: verification,
@@ -348,6 +360,8 @@ async function runOne(
     verification = repair.finalVerification;
     repairAttempts = repair.attempts.length;
     repairReason = repair.reason;
+  } else if (verification.status !== "passed" && execution.status !== "completed") {
+    repairReason = `repair_not_attempted_runtime_${execution.failure ?? execution.status}`;
   }
 
   async function verifyAttempt(attempt: number): Promise<VerificationResult> {
