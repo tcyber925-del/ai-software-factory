@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { JsonSchema } from "../src/kernel/json-schema.js";
 import { runPipeline } from "../src/kernel/pipeline.js";
@@ -434,8 +437,29 @@ describe("intake refusals surface without dispatching", () => {
     });
 
     expect(result.status).toBe("blocked");
-    expect(result.reason).toContain("intake refused");
+    expect(result.reason).toContain("scheduler blocked");
     expect(result.runs).toHaveLength(0);
+  });
+
+  it("names the scheduler and does not mention intake", async () => {
+    const result = await runPipeline({
+      workUnits: [
+        {
+          workUnit: { ...unit("X").workUnit, capabilities: ["rust"] },
+          paths: ["src/x"],
+        },
+      ],
+      schema,
+      runtimes: [runtime()],
+      checks,
+      cwd: ".",
+      runner: passing,
+      ...clock(),
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toContain("scheduler blocked");
+    expect(result.reason).not.toContain("intake");
   });
 });
 
@@ -717,4 +741,125 @@ describe("repair is not spent on a runtime that failed to run", () => {
     expect(result.status).toBe("blocked"); // the stub always rejects the prompt
     expect(result.runs[0]?.outcome).toBe("failed");
   });
+});
+
+/**
+ * The executed worktree must survive until verification reads it.
+ *
+ * Found by dogfooding, and it is the defect this file's own earlier tests could not
+ * see. `executeWorkUnit` cleaned up in a `finally`, so by the time the pipeline ran
+ * the checks the worktree had already been removed — verification ran against a
+ * deleted directory and failed for reasons that had nothing to do with the work.
+ *
+ * The tests here use a real `git worktree add`, because `FakeRuntime` creates a
+ * fictional path and therefore cannot observe the directory disappearing.
+ */
+
+describe("the executed worktree survives until verification has read it", () => {
+  /**
+   * A runtime whose worktree is a real directory that really is removed.
+   *
+   * `FakeRuntime` returns a fictional path, so it cannot observe a directory
+   * disappearing — which is why this defect survived every earlier test. `mkdirSync`
+   * and `rmSync` make the lifecycle observable without spawning `git`.
+   */
+  const realWorktreeRuntime = () => {
+    let n = 0;
+    const root = join(tmpdir(), "factory-wt-probe");
+    const runtime: LabelledRuntime = {
+      name: "worktree-runtime",
+      runtime: {
+        capabilities: async () => ["testing"],
+        health: async () => ({ available: true, runtime: "worktree-runtime" }),
+        createWorkspace: async () => ({ id: `ws-${++n}`, path: root }),
+        createWorktree: async (workspace: WorkspaceRef) => {
+          const worktreePath = join(workspace.path, `worktree-${++n}`);
+          mkdirSync(worktreePath, { recursive: true });
+          return { ...workspace, worktreePath };
+        },
+        startAgent: async () => ({ id: "agent", runtimeId: "agent" }),
+        promptAgent: async () => {},
+        waitAgent: async () => "idle",
+        inspectAgent: async () => ({ status: "idle" }),
+        collectRuntimeEvidence: async () => ({ runtime: "worktree-runtime", workspaceId: "ws", agentId: "agent", events: [] }),
+        cleanupWorkspace: async (workspace: WorkspaceRef) => {
+          if (workspace.worktreePath) rmSync(workspace.worktreePath, { recursive: true, force: true });
+        },
+      },
+    };
+    return runtime;
+  };
+
+  it("the verification directory exists at the moment the check runs", async () => {
+    let existedAtCheckTime: boolean | null = null;
+    let checkCwd: string | null = null;
+
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [realWorktreeRuntime()],
+      checks: [{ name: "probe", command: "true" }],
+      cwd: process.cwd(),
+      runner: {
+        async run(_command, _args, cwd) {
+          checkCwd = cwd;
+          existedAtCheckTime = existsSync(cwd);
+          return { stdout: "", stderr: "", exitCode: existedAtCheckTime ? 0 : 1 };
+        },
+      },
+      ...clock(),
+    });
+
+    // The whole defect in one assertion. Before the fix this was `false` and the
+    // run was `blocked` — a real failure with a misleading cause.
+    expect(existedAtCheckTime).toBe(true);
+    expect(checkCwd).toContain("worktree-");
+    expect(result.status).toBe("ready");
+  }, 20_000);
+
+  it("still removes the worktree once verification is done", async () => {
+    let checkCwd: string | null = null;
+    await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [realWorktreeRuntime()],
+      checks: [{ name: "probe", command: "true" }],
+      cwd: process.cwd(),
+      runner: {
+        async run(_command, _args, cwd) {
+          checkCwd = cwd;
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+      },
+      ...clock(),
+    });
+
+    // Verified *and* cleaned up. Deferring cleanup must not mean skipping it, or
+    // every adopting repository would accumulate worktrees.
+    expect(checkCwd).not.toBeNull();
+    expect(existsSync(checkCwd!)).toBe(false);
+  }, 20_000);
+
+  it("cleans up even when verification fails", async () => {
+    let checkCwd: string | null = null;
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [realWorktreeRuntime()],
+      checks: [{ name: "probe", command: "false" }],
+      cwd: process.cwd(),
+      repairPolicy: { maxAttempts: 0 },
+      runner: {
+        async run(_command, _args, cwd) {
+          checkCwd = cwd;
+          return { stdout: "", stderr: "", exitCode: 1 };
+        },
+      },
+      ...clock(),
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(checkCwd).not.toBeNull();
+    expect(existsSync(checkCwd!)).toBe(false);
+  }, 20_000);
 });

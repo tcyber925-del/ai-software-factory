@@ -88,6 +88,13 @@ actually produced, not at the factory's checkout. Verifying the checkout would l
 a runtime write anywhere and still pass, because the checks would never look at the
 work.
 
+**That tree has to still exist when the checks run.** Cleanup therefore belongs to
+the pipeline, after verification and repair, not to `executeWorkUnit`. Found by
+dogfooding, and worth stating plainly because the unit tests could not see it:
+`executeWorkUnit` cleaned up in a `finally`, so every check ran against an
+already-deleted directory and failed for reasons unrelated to the work. A fake
+runtime returns a fictional path and cannot observe a directory disappearing.
+
 If a runtime reports no worktree, the run **blocks**. It does not fall back to the
 checkout. `tests/pipeline.test.ts` covers both, and replacing the target with
 `cwd` fails two tests.

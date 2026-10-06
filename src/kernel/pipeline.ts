@@ -15,7 +15,7 @@ import type { PlanScheduleOptions, ScheduledWorkUnit, SchedulePlan } from "./sch
 import { planSchedule } from "./scheduler.js";
 import type { ShellCheckSpec, ShellRunner } from "../adapters/verification/shell.js";
 import { runShellVerification } from "../adapters/verification/shell.js";
-import type { EventLog } from "../state/event-log.js";
+import type { EventLog, LoggableEvent } from "../state/event-log.js";
 
 /**
  * The composed pipeline: the factory's units running in sequence.
@@ -140,13 +140,13 @@ export async function runPipeline(options: RunPipelineOptions): Promise<Pipeline
     }
   }
 
-  // A unit that was blocked at intake never dispatched; that is a blocked run,
-  // not a ready pipeline.
-  const intakeBlocked = plan.decisions.filter((decision) => decision.outcome === "blocked");
-  if (intakeBlocked.length > 0) {
+  // A unit that the scheduler blocked never dispatched; that is a blocked
+  // run, not a ready pipeline.
+  const schedulerBlocked = plan.decisions.filter((decision) => decision.outcome === "blocked");
+  if (schedulerBlocked.length > 0) {
     return {
       status: "blocked",
-      reason: `intake refused ${intakeBlocked.length} work unit(s): ${intakeBlocked
+      reason: `scheduler blocked ${schedulerBlocked.length} work unit(s): ${schedulerBlocked
         .map((decision) => `${decision.workUnitId} (${decision.reason ?? "unknown"})`)
         .join(", ")}`,
       plan,
@@ -227,6 +227,51 @@ function blockedBySecurityGate(
   };
 }
 
+/**
+ * Releases the workspace a run executed in.
+ *
+ * Best-effort: a cleanup failure is recorded and swallowed, because losing the
+ * ability to clean up must not erase the record of the run itself — the same
+ * reasoning `executeWorkUnit` applies to its own cleanup.
+ *
+ * The runtime is resolved by the name the execution recorded rather than captured
+ * at dispatch, so a repair attempt that selected a different runtime still releases
+ * the right workspace.
+ */
+async function releaseWorkspace(
+  runtimes: LabelledRuntime[],
+  execution: ExecutionRecord,
+  eventLog: EventLog | undefined,
+  runId: string,
+  workUnitId: string,
+  id: () => string,
+  now: () => string,
+): Promise<void> {
+  if (execution.workspaceId === undefined) return;
+  const labelled = runtimes.find((candidate) => candidate.name === execution.runtime);
+  if (labelled === undefined) return;
+
+  const append = async (type: string, payload: Record<string, unknown>): Promise<void> => {
+    await eventLog?.append([
+      { workUnitId, runId, source: "factory", type, payload, id: id(), timestamp: now() } as LoggableEvent,
+    ]);
+  };
+
+  try {
+    await labelled.runtime.cleanupWorkspace({
+      id: execution.workspaceId,
+      path: execution.worktreePath ?? "",
+      ...(execution.worktreePath === undefined ? {} : { worktreePath: execution.worktreePath }),
+    });
+    await append("workspace.cleaned", { workspaceId: execution.workspaceId });
+  } catch (error) {
+    await append("workspace.cleanup_failed", {
+      workspaceId: execution.workspaceId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /** One Work Unit through the whole sequence. */
 async function runOne(
   workUnit: WorkUnit,
@@ -290,133 +335,159 @@ async function runOne(
     now,
   };
 
-  let execution = await executeWorkUnit({
-    ...base,
-    workUnit,
-    worker: { id: `worker-${workUnit.id}`, capabilities: workUnit.capabilities, runtime: options.runtimes[0]?.name ?? "unknown" },
-    prompt: workUnit.goal,
-    runtimes,
-  });
-
   /**
-   * Verification runs against the tree that was actually executed.
+   * The workspace is released only after verification and repair have read it.
    *
-   * This is the second invariant composition puts at risk. Verifying the factory's
-   * own checkout would let a runtime write anywhere and still pass — the checks
-   * would never look at the work. So the executed worktree is the default target,
-   * and `verifyIn: "repo"` must be asked for explicitly.
+   * Cleanup belongs here rather than inside `executeWorkUnit` because
+   * independent verification inspects the tree the agent produced. Cleaning up
+   * at the end of execution destroys the evidence before it is checked, which
+   * made every worktree-scoped check fail against a deleted directory.
    *
-   * A runtime that reports no worktree cannot have its work verified; that is a
-   * blocked run, not a pass.
+   * Best-effort, as in `executeWorkUnit`: a cleanup failure must not erase the
+   * record of what happened.
    */
-  const verifyIn = options.verifyIn ?? "worktree";
-  const executedPath = execution.worktreePath;
-  const verificationCwd = verifyIn === "repo" ? cwd : executedPath;
-  if (verifyIn === "worktree" && executedPath === undefined) {
-    return blockedWithoutVerification(
+  // Hoisted so the `finally` below can release the workspace it created.
+  let execution: ExecutionRecord | undefined;
+  try {
+    execution = await executeWorkUnit({
+      ...base,
+      // The pipeline owns cleanup, because independent verification reads the
+      // executed worktree and it must still exist when it does.
+      cleanup: false,
       workUnit,
-      execution,
-      `runtime '${execution.runtime ?? "unknown"}' reported no worktree, so there is nothing to verify; refusing to fall back to the factory checkout`,
-    );
-  }
-
-  let verification = await verifyAttempt(1);
-  let repairAttempts: number | undefined;
-  let repairReason: string | undefined;
-
-  /**
-   * Repair fixes failing checks against *completed* work.
-   *
-   * When the runtime never completed, the failed check is a symptom of that rather
-   * than a cause, and re-issuing the same prompt to the same runtime re-encounters
-   * the same fault — at the cost of a full prompt ceiling per attempt. A timing-out
-   * runtime was measured dispatching three times and creating three worktrees before
-   * escalating, which is the budget spent on a known-failed outcome.
-   *
-   * Verification still runs either way: partial work may have landed, and that
-   * evidence is worth keeping. Only the repair loop is skipped.
-   */
-  if (verification.status !== "passed" && execution.status === "completed") {
-    const repair = await runRepairLoop({
-      workUnit,
-      initialVerification: verification,
-      ...(options.repairPolicy === undefined ? {} : { policy: options.repairPolicy }),
-      runId,
-      ...(eventLog === undefined ? {} : { eventLog, parentRunId: runId }),
-      id,
-      now,
-      execute: async (prompt, attempt) => {
-        execution = await executeWorkUnit({
-          ...base,
-          workUnit,
-          worker: { id: `worker-${workUnit.id}`, capabilities: workUnit.capabilities, runtime: options.runtimes[0]?.name ?? "unknown" },
-          prompt,
-          runtimes,
-        });
-        return execution;
-      },
-      verify: async (attempt) => verifyAttempt(attempt),
+      worker: { id: `worker-${workUnit.id}`, capabilities: workUnit.capabilities, runtime: options.runtimes[0]?.name ?? "unknown" },
+      prompt: workUnit.goal,
+      runtimes,
     });
-    verification = repair.finalVerification;
-    repairAttempts = repair.attempts.length;
-    repairReason = repair.reason;
-  } else if (verification.status !== "passed" && execution.status !== "completed") {
-    repairReason = `repair_not_attempted_runtime_${execution.failure ?? execution.status}`;
-  }
 
-  async function verifyAttempt(attempt: number): Promise<VerificationResult> {
-    // A repair attempt may have produced a new worktree, so the target is read
-    // at call time rather than captured before the first attempt.
-    const target = verifyIn === "repo" ? cwd : execution.worktreePath;
-    if (target === undefined) {
-      throw new Error(
-        `work unit ${workUnit.id} has no worktree to verify; the runtime reported none after execution`,
+    /**
+     * Verification runs against the tree that was actually executed.
+     *
+     * This is the second invariant composition puts at risk. Verifying the factory's
+     * own checkout would let a runtime write anywhere and still pass — the checks
+     * would never look at the work. So the executed worktree is the default target,
+     * and `verifyIn: "repo"` must be asked for explicitly.
+     *
+     * A runtime that reports no worktree cannot have its work verified; that is a
+     * blocked run, not a pass.
+     */
+    const verifyIn = options.verifyIn ?? "worktree";
+    const executedPath = execution.worktreePath;
+    const verificationCwd = verifyIn === "repo" ? cwd : executedPath;
+    if (verifyIn === "worktree" && executedPath === undefined) {
+      return blockedWithoutVerification(
+        workUnit,
+        execution,
+        `runtime '${execution.runtime ?? "unknown"}' reported no worktree, so there is nothing to verify; refusing to fall back to the factory checkout`,
       );
     }
-    const output = await runShellVerification({
-      workUnitId: workUnit.id,
-      checks: checksFor(workUnit, options.checks),
-      cwd: target,
-      attempt,
+
+    let verification = await verifyAttempt(1);
+    let repairAttempts: number | undefined;
+    let repairReason: string | undefined;
+
+    /**
+     * Repair fixes failing checks against *completed* work.
+     *
+     * When the runtime never completed, the failed check is a symptom of that rather
+     * than a cause, and re-issuing the same prompt to the same runtime re-encounters
+     * the same fault — at the cost of a full prompt ceiling per attempt. A timing-out
+     * runtime was measured dispatching three times and creating three worktrees before
+     * escalating, which is the budget spent on a known-failed outcome.
+     *
+     * Verification still runs either way: partial work may have landed, and that
+     * evidence is worth keeping. Only the repair loop is skipped.
+     */
+    if (verification.status !== "passed" && execution.status === "completed") {
+      const repair = await runRepairLoop({
+        workUnit,
+        initialVerification: verification,
+        ...(options.repairPolicy === undefined ? {} : { policy: options.repairPolicy }),
+        runId,
+        ...(eventLog === undefined ? {} : { eventLog, parentRunId: runId }),
+        id,
+        now,
+        execute: async (prompt, attempt) => {
+          execution = await executeWorkUnit({
+            ...base,
+            cleanup: false,
+            workUnit,
+            worker: { id: `worker-${workUnit.id}`, capabilities: workUnit.capabilities, runtime: options.runtimes[0]?.name ?? "unknown" },
+            prompt,
+            runtimes,
+          });
+          return execution;
+        },
+        verify: async (attempt) => verifyAttempt(attempt),
+      });
+      verification = repair.finalVerification;
+      repairAttempts = repair.attempts.length;
+      repairReason = repair.reason;
+    } else if (verification.status !== "passed" && execution.status !== "completed") {
+      repairReason = `repair_not_attempted_runtime_${execution.failure ?? execution.status}`;
+    }
+
+    async function verifyAttempt(attempt: number): Promise<VerificationResult> {
+      // A repair attempt may have produced a new worktree, so the target is read
+      // at call time rather than captured before the first attempt.
+      const target = verifyIn === "repo" ? cwd : execution?.worktreePath;
+      if (target === undefined) {
+        throw new Error(
+          `work unit ${workUnit.id} has no worktree to verify; the runtime reported none after execution`,
+        );
+      }
+      const output = await runShellVerification({
+        workUnitId: workUnit.id,
+        checks: checksFor(workUnit, options.checks),
+        cwd: target,
+        attempt,
+        runId,
+        ...(options.runner === undefined ? {} : { runner: options.runner }),
+        ...(eventLog === undefined ? {} : { eventLog }),
+        id,
+        now,
+      });
+      return output.result;
+    }
+
+    const integrationOutcome = await buildIntegrationResult({
+      execution,
+      verification,
       runId,
-      ...(options.runner === undefined ? {} : { runner: options.runner }),
       ...(eventLog === undefined ? {} : { eventLog }),
       id,
       now,
     });
-    return output.result;
+
+    // Outcome is derived from the integration record — never from runtime status.
+    const outcome: UnitOutcome =
+      integrationOutcome.result.state === "ready"
+        ? "ready"
+        : execution.status === "blocked"
+          ? "blocked"
+          : execution.status === "failed"
+            ? "failed"
+            : repairAttempts !== undefined && repairReason?.startsWith("repair_limit_reached") === true
+              ? "repair_exhausted"
+              : "blocked";
+
+    const run: UnitRun = {
+      workUnitId: workUnit.id,
+      outcome,
+      execution,
+      verification,
+      integration: integrationOutcome.result,
+    };
+    if (repairAttempts !== undefined) run.repairAttempts = repairAttempts;
+    if (repairReason !== undefined) run.repairReason = repairReason;
+    if (execution?.failure !== undefined) run.failure = execution.failure;
+
+    return run;
+  } finally {
+    // Undefined only if `executeWorkUnit` itself threw before producing a record,
+    // in which case there is nothing to release.
+    if (execution !== undefined) {
+      await releaseWorkspace(options.runtimes, execution, eventLog, runId, workUnit.id, id, now);
+    }
   }
-
-  const integrationOutcome = await buildIntegrationResult({
-    execution,
-    verification,
-    runId,
-    ...(eventLog === undefined ? {} : { eventLog }),
-    id,
-    now,
-  });
-
-  // Outcome is derived from the integration record — never from runtime status.
-  const outcome: UnitOutcome =
-    integrationOutcome.result.state === "ready"
-      ? "ready"
-      : execution.status === "blocked"
-        ? "blocked"
-        : execution.status === "failed"
-          ? "failed"
-          : repairAttempts !== undefined && repairReason?.startsWith("repair_limit_reached") === true
-            ? "repair_exhausted"
-            : "blocked";
-
-  const run: UnitRun = {
-    workUnitId: workUnit.id,
-    outcome,
-    execution,
-    verification,
-    integration: integrationOutcome.result,
-  };
-  if (repairAttempts !== undefined) run.repairAttempts = repairAttempts;
-  if (repairReason !== undefined) run.repairReason = repairReason;
-  if (execution.failure !== undefined) run.failure = execution.failure;
-  return run;
 }

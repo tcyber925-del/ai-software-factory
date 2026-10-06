@@ -233,3 +233,49 @@ describe("a dispatch that outlives its runtime ends as a recorded failure", () =
     expect(record.events.some((event) => event.type === "workspace.cleaned")).toBe(true);
   }, 15_000);
 });
+describe("the runner redirects stdout to a file, never a pipe", () => {
+  /**
+   * Measured against `opencode run` with a demanding prompt: with stdout on a pipe
+   * the child hung until the ceiling; the same command with stdout on a file
+   * completed. A `sh -c` wrapper that still ended in a pipe hung too, so it is the
+   * pipe itself and not the spawning style.
+   *
+   * This cannot be reproduced with a trivial command, so the test asserts the
+   * structural property instead: the child's stdout is a file descriptor, not a
+   * pipe, and the output survives to be read back.
+   */
+  it("captures stdout that exceeds any in-memory buffer", async () => {
+    // 3MB of output. `execFile`'s old default `maxBuffer` was 10MB, but a long
+    // agent transcript can exceed any fixed buffer; a file has no ceiling.
+    const bytes = 3 * 1024 * 1024;
+    const result = await defaultCommandRunner.run(
+      "node",
+      ["-e", `process.stdout.write("x".repeat(${bytes}))`],
+      process.cwd(),
+      { timeoutMs: 30_000 },
+    );
+    expect(result.stdout.length).toBe(bytes);
+  }, 40_000);
+
+  it("captures stderr separately from stdout", async () => {
+    const result = await defaultCommandRunner.run(
+      "node",
+      ["-e", 'process.stdout.write("OUT"); process.stderr.write("ERR")'],
+      process.cwd(),
+      { timeoutMs: 30_000 },
+    );
+    expect(result.stdout).toBe("OUT");
+    expect(result.stderr).toBe("ERR");
+  }, 20_000);
+
+  it("leaves no temporary files behind", async () => {
+    // The redirection must not become a disk leak in a repository that dispatches
+    // thousands of Work Units.
+    const { readdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const before = readdirSync(tmpdir()).filter((entry) => entry.startsWith("factory-cmd-")).length;
+    await defaultCommandRunner.run("node", ["-e", "process.stdout.write('x')"], process.cwd(), { timeoutMs: 30_000 });
+    const after = readdirSync(tmpdir()).filter((entry) => entry.startsWith("factory-cmd-")).length;
+    expect(after).toBe(before);
+  }, 20_000);
+});

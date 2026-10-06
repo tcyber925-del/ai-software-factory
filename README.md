@@ -224,7 +224,7 @@ shipped code.
 | `factory verify` is narrow | It runs the target project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |
 | Verification defaults to `npm test` | A project verifying another way passes `--checks <file.json>`; an empty list is refused |
 | Security risk signals are declared, not detected | The gate refuses `untrusted`/`destructive` work, but only from signals declared on the plan. It does not read the goal text to guess |
-| Linear intake is not composed | `src/adapters/linear/` has no CLI command; the "intake refused" path in the pipeline reads scheduler decisions |
+| Linear intake is not composed | `src/adapters/linear/` has no CLI command; the "scheduler blocked" path in the pipeline reads scheduler decisions |
 | CLI surface is narrower than the plan | Implemented: `work run`, `work validate`, `verify`, `doctor`. Not implemented: `init`, `work create`, `work status`, `workspace list` |
 | No SCM adapter | PR creation and merge stay human-led; the factory records the decision only |
 | No sandbox adapter | Nothing offers `sandbox` isolation, so `untrusted` and `destructive` work is **refused** at dispatch rather than run weakly |
