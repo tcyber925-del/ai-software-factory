@@ -107,9 +107,10 @@ real problem rather than untidiness.
 | **The contracts you adopt** | `AGENTS.md`, `.factory/policies/`, `.agents/skills/`, `docs/`, `LICENSE` | **Yes** |
 | **The factory's own test suite** | `tests/`, `fixtures/` | **No** |
 
-Remove the factory's own suite. If you keep it, `npm test` collects *its* 362 tests
-instead of yours, because `vitest run` globs `tests/` and that directory is already
-occupied. Your verify gate then reports green for work it never did.
+Remove the factory's own suite. If you keep it, `npm test` collects *its* tests instead of
+yours, because `vitest run` globs `tests/` and that directory is already occupied.
+Your verify gate then reports green for work it never did, and you pay for every
+irrelevant test on each push.
 
 ```bash
 rm -rf tests fixtures
@@ -223,8 +224,11 @@ Neither is fixed for you, and neither is caught by `npm run verify`:
   interpreting evidence and judging scope is still a human responsibility.
 - **It will not replace review.** A green `contract` run is necessary, not sufficient.
 - **It will not enforce a control it has not composed.** A green run proves the code that *is*
-  called behaves correctly. It says nothing about a control that exists but has no caller — the
-  security gate being the live example.
+  called behaves correctly. It says nothing about a control that exists but has no caller — and for
+  several merges this project shipped exactly that, with the security gate documented as enforced
+  while nothing in the composed path called it. The general rule now has a test
+  (`tests/documentation.test.ts` fails if a doc calls the gate unwired), but a green suite still
+  cannot tell you a control is wired. Only running it can.
 - **It will not secure untrusted code.** A Git worktree is developer isolation.
   Higher-risk execution needs stronger isolation (see `docs/security.md`), and today the refusal
   is not applied at dispatch.

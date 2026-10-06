@@ -52,7 +52,9 @@ Independent verification  (against the executed worktree)             ← compos
         ↓
   ├─ failed → bounded repair → re-verify → escalate at the limit       ← composed
   ↓
-Integration gate  (ready only through passing verification)            ← composed
+Scope check  (did the change stay inside the declared `paths`?)         ← composed
+  ↓
+Integration gate  (ready only through passing verification and scope)  ← composed
         ↓
 Durable event log  (reconstructable; runtime state ≠ factory state)    ← composed
         ↓

@@ -39,6 +39,34 @@ The GitHub branch protection/ruleset for `main` requires the CI job `contract`, 
 
 An adopting repository must establish the same rule. If GitHub repository settings are unavailable to the factory automation, this remains an explicit repository-owner configuration item; the factory must not pretend that documentation alone enforces the gate.
 
+## Scope gate
+
+A Work Unit's declared `paths` are a **write boundary**, not a hint. After verification passes and
+before the integration gate, the factory reads the worktree's diff and compares it against the
+declaration. A change outside it is recorded as a durable `scope.violation` event naming every file,
+and by default prevents `ready`.
+
+The reason names the files, because the worktree is cleaned up before an operator can look. A
+dependency lockfile appearing in that list is called out specifically, per the policy below.
+
+Ordering is deliberate: the checks decide whether the work is correct, and only a correct run is worth
+asking whether it stayed inside its boundary. A run that is **both** broken and out of scope reports
+both, with the failed checks leading — reporting either alone hides the other.
+
+Three outcomes, none a silent pass:
+
+| Situation | Result |
+| --- | --- |
+| Changes within `paths` | `ready` |
+| Changes outside `paths` | Blocked, files named. `--no-strict-scope` downgrades to a warning |
+| No `paths` declared | No gate; recorded as `undeclared`, never as "in scope" |
+| Diff unreadable | The run **fails** |
+
+**This is an audit and a gate, not a sandbox.** A determined agent can still do damage inside a
+declared path, and it can reach a worktree it should not before the diff is read. Mid-run enforcement
+was deliberately rejected: killing an agent mid-write risks a half-applied change, which is worse
+than a detectable boundary crossing.
+
 ## Independence rule
 
 The agent or runtime that performs implementation must not be the sole authority that declares the result correct.
@@ -92,7 +120,7 @@ Zero approvals is deliberate: a single-maintainer repository would otherwise dea
 gate. Enforce-on-admins is the setting that makes the gate real, since without it the rule is
 advisory for the only person who can merge.
 
-`npm run verify` is the local equivalent: `tsc --noEmit`, a CLI emit, and 301 tests across 20 files.
+`npm run verify` is the local equivalent: `tsc --noEmit`, a CLI emit, and the full test suite.
 
 `factory verify` is **not** the same gate and does not currently pass — it invokes `format:check`,
 `lint`, and `typecheck`, none of which this repository defines. See [cli.md](cli.md).

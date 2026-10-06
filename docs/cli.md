@@ -65,11 +65,13 @@ entry point that an adopting repository fills in with its own `format:check`,
 ## The pipeline
 
 ```
-validate → plan → select runtime → dispatch → verify (independent)
-        → repair if verification failed, bounded → integration record
+validate → security gate → plan → select runtime → dispatch → verify (independent)
+        → repair if verification failed and the runtime actually ran, bounded
+        → scope check: did it stay inside its declared `paths`?
+        → integration record
 ```
 
-Two invariants are enforced in `src/kernel/pipeline.ts` rather than documented and
+Three invariants are enforced in `src/kernel/pipeline.ts` rather than documented and
 hoped for.
 
 ### 1. Readiness comes only from independent verification
@@ -102,6 +104,24 @@ checkout. `tests/pipeline.test.ts` covers both, and replacing the target with
 
 `--verify-in repo` is the explicit opt-out, for the case where the factory is
 verifying its own checkout.
+
+### 3. Scope is a write boundary
+
+After verification passes and before the integration gate, the pipeline reads the
+worktree's diff and compares it against the Work Unit's declared `paths`. A change
+outside it is recorded as a durable `scope.violation` event naming every file, and
+by default prevents `ready`.
+
+`paths` used to feed conflict detection and nothing else, so an agent could edit
+anything and still reach `ready`. Dogfooding found it writing outside its
+declaration, including to `package-lock.json`.
+
+Path matching is **shared with the scheduler**. Two notions of "these paths are
+related" that disagreed would let work serialize for a conflict it never had, or
+pass a boundary it crossed.
+
+This is an audit and a gate, **not a sandbox** — see the scope table above for the
+three outcomes and when no gate applies at all.
 
 ### What the pipeline does not compose
 
@@ -237,7 +257,7 @@ framework is not worth breaking that for.
 | --- | --- |
 | `npm run build` | `tsc --noEmit` — typecheck only |
 | `npm run build:cli` | `tsc -p tsconfig.build.json` — emit `dist/` for the `bin` |
-| `npm test` | `vitest run` — 301 tests across 20 files |
+| `npm test` | `vitest run` |
 | `npm run verify` | build, build:cli, test |
 
 Note that `npm run verify` and `factory verify` are different things: the first is

@@ -4,14 +4,21 @@ A provider-neutral, GitHub-native coordination layer for safely dispatching AI e
 
 ## Status
 
-**Runnable — the vertical slice is complete and composed**
+**Runnable, released as [`v0.1.0`](https://github.com/tcyber925-del/ai-software-factory/releases/tag/v0.1.0), and verified end to end on itself**
 
-The factory is implemented and can be run: `factory work run` validates Work Units, plans the
-schedule, selects a runtime, dispatches into isolated worktrees, verifies independently, repairs
-within a bound, and records the integration decision.
+The factory dispatched one of its own Work Units through `factory work run`: a real agent in a real
+worktree, `npm ci` + typecheck + the full suite run *inside that worktree*, independent verification
+passed, the integration gate reached, and the worktree cleaned up. Reported `ready`.
+
+`work run` validates Work Units, applies the security gate, plans the schedule, dispatches into
+isolated worktrees, verifies independently, repairs within a bound, checks the change stayed inside
+its declared scope, and records the integration decision.
 
 Still not implemented, by design: hosted control plane, database, scheduler daemon, web dashboard,
 custom agent runtime, and autonomous merge or release. See [Non-goals for V1](#non-goals-for-v1).
+
+**Start with [`docs/using-the-factory.md`](docs/using-the-factory.md)** if you want to run it, or
+[`docs/adoption.md`](docs/adoption.md) if you want to adopt it.
 
 ### What `work run` composes, and what it does not
 
@@ -99,22 +106,36 @@ Against the shipped `examples/example-plan.json`, `work run` reports
 twice, and the repair loop escalates. The run demonstrates that the gate blocks. To see a `ready`
 run, use a runtime that creates a real tree, or `--verify-in repo`. See [docs/cli.md](docs/cli.md).
 
-`factory verify` is **not** currently usable in this repository. It shells out to
-`npm run format:check`, `lint`, `typecheck`, `test`, `build`, and this repository defines none of
-`format:check`, `lint`, or `typecheck`, so it exits `1` at the first step. `npm run verify` is the
-working equivalent. Tracked, not worked around.
+`factory verify` runs this repository's own `verify` script, so `node dist/bin.js verify` and
+`npm run verify` are equivalent here. A project that declares none of `verify`,
+`format:check`, `lint`, `typecheck`, `test`, or `build` gets a **failure**, not a vacuous pass —
+nothing verified must never be reported as verification passed.
 
-`factory work run` is the composition layer: it validates Work Units, plans the
-schedule, selects a runtime, dispatches into isolated worktrees, verifies
-independently, repairs within a bound, and records the integration decision.
+## `work run`, end to end
 
-Readiness comes only from independent verification, never from runtime status, and
-the checks run against the tree that was actually executed. See
-[docs/cli.md](docs/cli.md).
+```
+validate → security gate → plan → select runtime → dispatch into a worktree
+        → independent verification (against the executed worktree)
+        → bounded repair, only if the runtime actually ran
+        → scope check: did it stay inside its declared `paths`?
+        → integration record → durable event log → worktree cleaned up
+```
+
+Three invariants are enforced in code rather than documented and hoped for:
+
+1. **Readiness comes only from independent verification.** Nothing derives readiness from runtime
+   status.
+2. **Verification runs against the executed worktree**, not your checkout — and that worktree still
+   exists when the checks run.
+3. **Scope is a write boundary.** A change outside the declared `paths` prevents `ready`.
+
+Exit `0` only when every Work Unit reached `ready`. See [docs/cli.md](docs/cli.md).
 
 ## The vertical slice
 
-Shipped and verified — 19 Work Units, `FCT-001` through `FCT-025` with gaps at `017`–`020` and `022`:
+Shipped and verified. `FCT-001` through `FCT-025` with gaps at `017`–`020` and `022`, then the
+units that closed the gaps dogfooding found. The count is left to the table — a figure in prose
+goes stale the moment a row is added:
 
 | # | Shipped | Evidence |
 |---|---|---|
@@ -127,7 +148,7 @@ Shipped and verified — 19 Work Units, `FCT-001` through `FCT-025` with gaps at
 | 7 | Failure, reconciliation, and conflict behaviour | `src/kernel/scheduler.ts`, `src/state/provenance.ts` |
 | 8 | Durable event provenance | `src/state/event-log.ts` |
 | 9 | A scheduler and a runtime-agnostic pipeline | `src/kernel/scheduler.ts`, `src/kernel/pipeline.ts` |
-| 10 | Security classification and an isolation gate | `src/security/` — library only, not composed into `work run` |
+| 10 | Security classification and an isolation gate | `src/security/` — **composed**, evaluated before dispatch |
 | 11 | A `factory doctor` environment check | `src/doctor/` |
 | 12 | A runnable CLI composing the execution path | `src/kernel/pipeline.ts`, `src/cli/`, `src/bin.ts` |
 | 13 | Linear intake and status reflection | `src/adapters/linear/` — library only, no CLI command |
@@ -137,10 +158,17 @@ Shipped and verified — 19 Work Units, `FCT-001` through `FCT-025` with gaps at
 | 17 | Dogfooded on a real external repository | `FCT-010`; a false-green verification gate was found and fixed there |
 | 18 | Scope-safe test discovery | `vitest.config.ts` — excludes `.worktrees/` and `.tmp-test/` |
 | 19 | Factory-relative Work Unit schema resolution | `src/cli/index.ts` — the schema resolves from the installed factory, not the cwd |
+| 20 | Bounded runtime calls | `src/adapters/opencode/process.ts` — a prompt is capped at 900s, every other subprocess at 120s |
+| 21 | Subprocess output to a file, never a pipe | A runtime agent deadlocks on a pipe; `defaultCommandRunner` redirects to files |
+| 22 | Worktree survives until verification reads it | Cleanup belongs to the pipeline, not to `executeWorkUnit` |
+| 23 | Repair skipped when the runtime never ran | Repair fixes failing checks against completed work; it is not a retry mechanism |
+| 24 | Scope enforcement | `src/kernel/scope.ts`, `src/adapters/git/changes.ts` — `paths` is a write boundary |
+| 25 | Adoption payload separated from the tool | `docs/adoption.md`, `templates/project/README.md` |
+| 26 | `v0.1.0` released | Adopters can pin a version instead of cloning whatever is on `main` |
 
 Work Unit numbering is not contiguous: `FCT-014` was merged from a branch named
 `FCT-021-security-hardening`, and `FCT-017`–`FCT-020` and `FCT-022` were never issued. GitHub issue
-and PR titles use the `FCT-0xx` prefix; the repository has no release tags.
+and PR titles use the `FCT-0xx` prefix. Released as [`v0.1.0`](https://github.com/tcyber925-del/ai-software-factory/releases/tag/v0.1.0).
 
 ## Non-goals for V1
 
@@ -173,7 +201,7 @@ and PR titles use the `FCT-0xx` prefix; the repository has no release tags.
 │   └── bin.ts            # `factory` entry point
 ├── examples/             # Example Work Units and a runnable plan
 ├── fixtures/             # Recorded and synthetic payloads for offline tests
-├── tests/                # Deterministic and integration tests (301 tests, 20 files)
+├── tests/                # Deterministic and integration tests
 ├── templates/            # Reusable project/skill templates
 └── AGENTS.md             # The agent contract every agent must follow
 ```
@@ -181,7 +209,9 @@ and PR titles use the `FCT-0xx` prefix; the repository has no release tags.
 ## Verification
 
 `npm run verify` runs `tsc --noEmit`, emits the CLI to `dist/`, and runs Vitest. Current baseline:
-**301 tests across 20 files**, all passing.
+`npm run verify` runs typecheck, the CLI emit, and the whole suite. Its output is the
+source of truth for the test count — deliberately not written here, because a number in
+prose is wrong the moment a test is added.
 
 Test discovery is scoped to `tests/**/*.test.ts` in `vitest.config.ts`. This is deliberate: Vitest's
 default glob collects tests from `.worktrees/`, so a stale worktree inflates the reported count.
@@ -214,6 +244,23 @@ committed artifact; a clean clone starts with no trace.
 | [docs/adoption.md](docs/adoption.md) | Adopting the factory as a template |
 | [docs/licensing.md](docs/licensing.md) | The MIT decision and its rationale |
 
+## What dogfooding found
+
+Running the factory on itself surfaced defects that no amount of green tests would have. Each was
+fixed and is listed above; recorded here because the pattern matters more than the individual bugs.
+
+| Defect | Why no test caught it |
+|---|---|
+| A dispatch could hang indefinitely and fail silently | The log stayed frozen at `worker.started`, so the evidence read as work-in-progress rather than as failure |
+| Verification ran against a **deleted** worktree | Cleanup happened before the checks. The test written for that invariant used a fake runtime returning a fictional path — it *could not* have observed a directory disappearing |
+| A runtime agent deadlocks when its stdout is a pipe | Only reproducible with a real agent and a demanding prompt |
+| Repair re-dispatched a runtime that had already failed | Every unit test used a runtime that succeeded |
+| `paths` was documented but never checked | Nothing compared the worktree's diff against the declaration |
+| A fresh clone's `npm test` ran the factory's own suite | Only visible by cloning and following the guide literally |
+
+The recurring shape: **a green suite proves the parts work, not that they compose.** Four of these
+six were invisible to unit tests by construction.
+
 ## Known divergences
 
 Recorded rather than quietly reconciled. Each is a real gap between a documented design and the
@@ -224,6 +271,7 @@ shipped code.
 | `factory verify` is narrow | It runs the target project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |
 | Verification defaults to `npm test` | A project verifying another way passes `--checks <file.json>`; an empty list is refused |
 | Security risk signals are declared, not detected | The gate refuses `untrusted`/`destructive` work, but only from signals declared on the plan. It does not read the goal text to guess |
+| Scope is enforced, not advisory | An out-of-scope change blocks `ready`. A Work Unit declaring no `paths` gets no gate, recorded as `undeclared`. An audit and a gate, **not a sandbox** |
 | Linear intake is not composed | `src/adapters/linear/` has no CLI command; the "scheduler blocked" path in the pipeline reads scheduler decisions |
 | CLI surface is narrower than the plan | Implemented: `work run`, `work validate`, `verify`, `doctor`. Not implemented: `init`, `work create`, `work status`, `workspace list` |
 | No SCM adapter | PR creation and merge stay human-led; the factory records the decision only |
