@@ -192,6 +192,41 @@ describe("the invariants are documented where they are enforced", () => {
   });
 });
 
+describe("the adoption guide cannot ship a broken starting point", () => {
+  /**
+   * A fresh clone has the factory's own 362-test suite at `tests/`. An adopter who
+   * keeps it gets a verify gate that collects those tests instead of their own, so
+   * the guide must say to remove them. This failed silently until simulated.
+   */
+  it("tells the adopter to delete the factory's own test suite", () => {
+    const adoption = read("docs/adoption.md");
+    expect(adoption).toMatch(/rm -rf tests fixtures/);
+    expect(adoption).toMatch(/instead of yours|instead of your/);
+  });
+
+  it("warns that copying package.json clobbers an existing project", () => {
+    const adoption = read("docs/adoption.md");
+    expect(adoption).toMatch(/[Mm]erge these into your existing files rather than copying/);
+  });
+
+  it("tells the adopter the shipped CI workflow tests the factory, not their project", () => {
+    expect(read("docs/adoption.md")).toMatch(/tests \*\*the factory\*\*/);
+  });
+
+  it("says the same thing in the template's own README", () => {
+    // The README is what an adopter reads after cloning, before the guide.
+    const template = read("templates/project/README.md");
+    expect(template).toMatch(/rm -rf tests fixtures/);
+    expect(template).toMatch(/not a drop-in replacement/i);
+  });
+
+  it("keeps the factory's own suite at tests/ while CI still requires it", () => {
+    // Guard the guard: if the suite ever moves, this test must be revisited rather
+    // than silently passing because the path no longer exists.
+    expect(() => read("tests/pipeline.test.ts")).not.toThrow();
+  });
+});
+
 describe("the examples are runnable", () => {
   it("the example plan is a plan, not a bare Work Unit", () => {
     // The CLI reads plans; the wire-form Work Unit alone is not one. Shipping only

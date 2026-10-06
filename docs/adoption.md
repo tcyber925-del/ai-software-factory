@@ -15,7 +15,8 @@ self-authorizing correctness.
 | `.github/workflows/ci.yml` | The `contract` job: build, tests, schemas, docs, skill pack |
 | `.factory/policies/` | Autonomy policy and local project policy template |
 | `examples/` | An example Work Unit in human, wire, and plan form |
-| `templates/project/`, `templates/skills/` | Starting points for a new project and skills |
+| `tests/`, `fixtures/` | **The factory's own suite. Delete both** — see step 4 |
+| `templates/project/`, `templates/skills/` | Starting points for a new project and skills — see [the template's own README](https://github.com/tcyber925-del/ai-software-factory/blob/main/templates/project/README.md) |
 
 ## Requirements
 
@@ -95,18 +96,59 @@ Edit `templates/project/.factory/policies/project-policy.md` into your repositor
 Keep `AGENTS.md` at the repository root. It is the agent contract, and
 `templates/project` does not replace it.
 
-### 4. Seed project layout
+### 4. Separate the tool from the payload
+
+**This repository is two things at once**, and keeping both in your project is a
+real problem rather than untidiness.
+
+| | Files | Keep? |
+|---|---|---|
+| **The tool** — the `factory` CLI you run | `src/`, `schemas/`, `examples/`, `templates/` | **Yes** |
+| **The contracts you adopt** | `AGENTS.md`, `.factory/policies/`, `.agents/skills/`, `docs/`, `LICENSE` | **Yes** |
+| **The factory's own test suite** | `tests/`, `fixtures/` | **No** |
+
+Remove the factory's own suite. If you keep it, `npm test` collects *its* 362 tests
+instead of yours, because `vitest run` globs `tests/` and that directory is already
+occupied. Your verify gate then reports green for work it never did.
 
 ```bash
-cp templates/project/package.json   .
+rm -rf tests fixtures
+mkdir -p tests
+```
+
+Keep `src/`. That is the CLI, and `factory work run` needs it.
+
+Then seed the layout. **Merge these into your existing files rather than copying over
+them** — a blind `cp` replaces your dependencies, scripts, and name:
+
+```bash
+# greenfield: these are starting points
 cp templates/project/tsconfig.json .
-mkdir -p src tests
+
+# brownfield: read them and take what applies
+cat templates/project/package.json
+cat templates/project/tsconfig.json
+
 cp templates/project/.factory/policies/project-policy.md .factory/policies/
 ```
 
 Then `npm install` to generate your own lockfile.
 
-### 5. Author your first Work Unit
+### 5. Make the CI gate yours
+
+`.github/workflows/ci.yml` in this repository tests **the factory**. Left as-is it
+will run the factory's checks against your repository, which is not the same thing as
+testing your work.
+
+Replace the steps with your project's build, tests, schemas, and documentation. Keep
+the parts that are about *your* guarantees: schema validation if you ship schemas,
+documentation presence, and whatever proves your own acceptance criteria.
+
+The `contract` job name is referenced by branch protection. Keep the name, or update
+the required check to match — otherwise the gate you configured is not the gate that
+runs.
+
+### 6. Author your first Work Unit
 
 ```bash
 mkdir -p docs/work-units
@@ -132,7 +174,7 @@ Requirements, not providers:
 { "capabilities": ["run on opencode"] }     // wrong — provider, not requirement
 ```
 
-### 6. Write skills for your project
+### 7. Write skills for your project
 
 ```bash
 cp -r templates/skills/project-verification .agents/skills/
@@ -145,6 +187,9 @@ inside the skill.
 
 ## Adoption checklist
 
+- [ ] The factory's own `tests/` and `fixtures/` are removed, so `npm test` runs **your** tests
+- [ ] `npm test` runs your project's tests, not the factory's
+- [ ] `.github/workflows/ci.yml` tests your project; the `contract` job name still matches branch protection
 - [ ] `npm ci` succeeds on a fresh clone
 - [ ] `npm run verify` passes (typecheck, CLI emit, tests)
 - [ ] `node dist/bin.js doctor` reports at least `degraded`, ideally `healthy`

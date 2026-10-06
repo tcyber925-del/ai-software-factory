@@ -6,7 +6,7 @@
   "description": "Starter package for a project that adopted the AI Software Factory template.",
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "verify": "npm run build && npm test"
   },
   "devDependencies": {

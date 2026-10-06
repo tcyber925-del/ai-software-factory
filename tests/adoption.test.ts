@@ -37,9 +37,12 @@ describe("template project scaffolding", () => {
       private: boolean;
     };
     expect(pkg.scripts["build"]).toBe("tsc --noEmit");
-    expect(pkg.scripts["test"]).toBe("vitest run");
     expect(pkg.scripts["verify"]).toContain("npm run build");
     expect(pkg.private).toBe(true);
+    // `--passWithNoTests` because a fresh project has no tests yet, and an empty
+    // suite exiting non-zero would fail CI on a repository that has done nothing
+    // wrong. Without it, `vitest run` on an empty directory exits 1.
+    expect(pkg.scripts["test"]).toBe("vitest run --passWithNoTests");
     for (const dependency of ["typescript", "vitest", "@types/node"]) {
       expect(pkg.devDependencies[dependency]).toBeDefined();
     }
