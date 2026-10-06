@@ -485,43 +485,50 @@ Read these before you rely on the factory.
 | **No SCM adapter** | The factory never opens a PR or pushes a branch. You close the loop |
 | **`init`, `work create`, `work status`, `workspace list` are not implemented** | The specified CLI surface is narrower than documented in the plan |
 | **A dispatched worktree has no installed dependencies** | It is a fresh checkout, so `npm test` cannot run in it. Your checks must install dependencies first — see below |
-| **The security gate is not on the dispatch path** | `src/security/` classifies risk and would refuse `untrusted`/`destructive` work, but `work run` never calls it. **Such work currently runs.** See below |
+| **Security risk signals are declared, not detected** | `work run` refuses `untrusted`/`destructive` work — but only from signals you declare on the plan. It does **not** read the goal to guess. See below |
 | **Linear intake is not on the dispatch path** | `src/adapters/linear/` ships and is tested, but no CLI command reads it. Use the library directly |
 | **`factory verify` only knows npm scripts** | It runs the project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |
 | **`docs/architecture.md` is not checked for truth** | `doctor` verifies presence, not accuracy. You own this |
 | **Nested dispatch is refused** | Dispatch from the primary repository root, not from a worktree |
 
-## The security gate is implemented but NOT applied
+## The security gate is enforced — on what you declare
 
-This is the most important limitation in this guide.
+`work run` refuses `untrusted` and `destructive` work **before** anything is dispatched: before a
+workspace, before a worktree, before a runtime is invoked.
 
-`src/security/risk.ts` implements risk classification and admission. Given a Work
-Unit that consumes untrusted content, it returns:
+You declare the signals on the plan:
 
 ```json
-{ "risk": "untrusted", "minimumIsolation": "sandbox",
-  "providedIsolation": "none", "adequate": false }
+[
+  {
+    "workUnit": { "id": "W-1", "goal": "Summarise customer-uploaded files", "...": "..." },
+    "paths": ["src/summarise"],
+    "risk": { "consumesUntrustedContent": true }
+  }
+]
 ```
 
-`adequate: false` means `evaluateSecurityGate` refuses admission.
+| Signal | Class | Requires |
+|---|---|---|
+| `touchesProduction` | `destructive` | `sandbox` |
+| `consumesUntrustedContent` | `untrusted` | `sandbox` |
+| `executesArbitraryCommands` | `untrusted` | `sandbox` |
+| `declaredRisk` | raises the class only — never lowers it | per class |
 
-**But `factory work run` never calls it.** `src/kernel/pipeline.ts` does not import
-the security module at all. Verified: a Work Unit whose goal is "execute a script
-fetched from an untrusted URL at runtime" was dispatched, the runtime was invoked,
-repair ran twice, and the event log contained **zero** security events.
+No adapter offers `sandbox`, so **any** of those signals means the Work Unit is refused. That is the
+intended outcome, not a bug to work around: the alternative is running untrusted code in a worktree,
+which separates files and nothing else.
 
-So today, higher-risk work is *not* refused at dispatch. The control exists, is
-tested, and is documented — and is not on the path. Treat this as a known gap, not
-as a guarantee, and do not rely on the factory to stop you from running untrusted
-code.
+**The limitation, stated plainly: absence of a declaration is not evidence of safety.** Declare
+nothing and you get `trusted`, which a worktree satisfies. The factory will not read your goal text
+and guess — inferring "consumes untrusted content" from the wording would be a guess dressed as a
+control. Declaring the signals is your job.
 
 ## A Git worktree is not a sandbox
 
 A worktree separates files. It does not separate privileges, processes, or the
-host. Treat it as developer isolation. Because no adapter offers sandbox
-isolation, composing the gate today would **refuse** all higher-risk work outright
-rather than run it — which is the intended behaviour, but it means adopting the
-gate is a real decision with a real cost.
+host. Treat it as developer isolation — which is exactly how the factory treats
+it, and why higher-risk work is refused rather than run in one.
 
 ---
 

@@ -3,6 +3,7 @@ import type { JsonSchema } from "../kernel/json-schema.js";
 import type { ScheduledWorkUnit } from "../kernel/scheduler.js";
 import type { LabelledRuntime } from "../kernel/work-unit.js";
 import { workUnitFromWireForm } from "../kernel/work-unit.js";
+import type { ExecutionRiskInput } from "../security/risk.js";
 import type { ShellCheckSpec, ShellRunner } from "../adapters/verification/shell.js";
 import type { EventLog } from "../state/event-log.js";
 
@@ -175,8 +176,46 @@ export function readWorkUnitFile(path: string): ScheduledWorkUnit[] {
     if (record["protectedResources"] !== undefined) {
       scheduled.protectedResources = strings(record["protectedResources"], "protectedResources", index);
     }
+    if (record["risk"] !== undefined) scheduled.risk = readRisk(record["risk"], index);
     return scheduled;
   });
+}
+
+/**
+ * Reads declared execution risk from a plan.
+ *
+ * Only the three signals and the declared class are accepted, and every one must
+ * be a boolean or a known class. Anything else is refused rather than coerced: a
+ * typo in a security signal must not silently read as "false", because that would
+ * downgrade the gate to a no-op for that field.
+ *
+ * No inference happens here. The factory does not guess risk from the goal text.
+ */
+function readRisk(value: unknown, index: number): ExecutionRiskInput {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`risk[${index}]: expected an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const risk: ExecutionRiskInput = {};
+
+  for (const field of ["consumesUntrustedContent", "executesArbitraryCommands", "touchesProduction"] as const) {
+    const signal = record[field];
+    if (signal === undefined) continue;
+    if (typeof signal !== "boolean") {
+      throw new Error(`risk[${index}].${field}: expected true or false`);
+    }
+    risk[field] = signal;
+  }
+
+  const declared = record["declaredRisk"];
+  if (declared !== undefined) {
+    if (declared !== "trusted" && declared !== "untrusted" && declared !== "destructive") {
+      throw new Error(`risk[${index}].declaredRisk: expected trusted, untrusted, or destructive`);
+    }
+    risk.declaredRisk = declared;
+  }
+
+  return risk;
 }
 
 function strings(value: unknown, field: string, index: number): string[] {

@@ -1,6 +1,7 @@
 import type { Conflict, ConflictReason, WorkerRuntime, WorkUnit } from "../protocol.js";
 import type { EventLog } from "../state/event-log.js";
 import type { LabelledRuntime } from "./work-unit.js";
+import type { ExecutionRiskInput } from "../security/risk.js";
 
 /**
  * Conservative dependency and conflict scheduler.
@@ -32,6 +33,20 @@ export interface ScheduledWorkUnit {
   runtimes?: string[];
   /** Exclusive resources it needs, e.g. a protected branch. */
   protectedResources?: string[];
+  /**
+   * Declared execution risk, consumed by the security gate before dispatch.
+   *
+   * These signals live on the plan rather than on `WorkUnit` because the Work Unit
+   * is the portable contract and deliberately says nothing about how it will be
+   * executed. Risk is a property of *this dispatch*, and it belongs with the other
+   * dispatch facts.
+   *
+   * They are declared, never inferred. Deriving "consumes untrusted content" from
+   * the goal string would be a guess dressed as a control, which is the exact
+   * failure mode the factory exists to prevent. The gate enforces what is declared;
+   * it is not content analysis. See `docs/security-policy.md`.
+   */
+  risk?: ExecutionRiskInput;
 }
 
 export type DecisionOutcome = "scheduled" | "blocked";

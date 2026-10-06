@@ -283,6 +283,45 @@ describe("the schema is found from outside the factory checkout", () => {
   });
 });
 
+describe("risk signals are read strictly, never coerced", () => {
+  const withRisk = (risk: unknown, name: string) => {
+    const path = join(scratch(`risk-${name}`), "plan.json");
+    writeFileSync(path, JSON.stringify([{ workUnit: validWire, paths: ["src/a"], ...(risk === undefined ? {} : { risk }) }]));
+    return path;
+  };
+
+  it("reads all three signals and a declared class", () => {
+    const units = readWorkUnitFile(withRisk(
+      { consumesUntrustedContent: true, executesArbitraryCommands: true, touchesProduction: true, declaredRisk: "destructive" },
+      "all",
+    ));
+    expect(units[0]?.risk).toEqual({
+      consumesUntrustedContent: true,
+      executesArbitraryCommands: true,
+      touchesProduction: true,
+      declaredRisk: "destructive",
+    });
+  });
+
+  it("refuses a non-boolean signal rather than reading it as false", () => {
+    // A typo must not silently downgrade the gate to a no-op for that field.
+    expect(() => readWorkUnitFile(withRisk({ touchesProduction: "yes" }, "typo"))).toThrow(/touchesProduction/);
+    expect(() => readWorkUnitFile(withRisk({ consumesUntrustedContent: 1 }, "num"))).toThrow(/consumesUntrustedContent/);
+  });
+
+  it("refuses an unknown declaredRisk", () => {
+    expect(() => readWorkUnitFile(withRisk({ declaredRisk: "maybe" }, "cls"))).toThrow(/declaredRisk/);
+  });
+
+  it("refuses a non-object risk", () => {
+    expect(() => readWorkUnitFile(withRisk(["untrusted"], "arr"))).toThrow(/expected an object/);
+  });
+
+  it("omits risk entirely when not declared", () => {
+    expect(readWorkUnitFile(withRisk(undefined, "none"))[0]?.risk).toBeUndefined();
+  });
+});
+
 describe("the checks file decides what verification runs", () => {
   const checks = (name: string, body: unknown): string =>
     writeChecks(name, typeof body === "string" ? body : JSON.stringify(body));

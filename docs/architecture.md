@@ -34,7 +34,7 @@ Work Unit  (declarative; capabilities, not providers)
         ↓
 Eligibility  (Linear intake — explicit allowlist, nothing inferred)   ← library, not composed
         ↓
-Security gate  (risk class → required isolation)                      ← library, not composed
+Security gate  (risk class → required isolation)                      ← composed, before dispatch
         ↓
 Scheduler  (batches, conflicts, dependencies)                         ← composed
         ↓
@@ -63,7 +63,9 @@ Release / observe / learn                                              ← human
 
 The annotations matter. Four boxes are marked *library, not composed* or *human-led* because they are shipped and documented but not on the CLI's dispatch path. `src/kernel/pipeline.ts` composes only the boxes marked *composed*. See [cli.md](cli.md).
 
-The most consequential annotation is the security gate. `src/security/` implements risk classification and admission, and `evaluateSecurityGate` returns one decision per control — but nothing in `src/kernel/pipeline.ts` calls it. A `untrusted` Work Unit is therefore **not** refused by `factory work run` today. The control exists and is tested; it is not applied at dispatch.
+The security gate runs **before** anything is dispatched — before a workspace, before a worktree,
+before a runtime is invoked — so a refusal has no aftermath to clean up. Each decision is persisted as
+a durable factory event, for admitted work as well as refused work.
 
 ## The composition layer
 
@@ -132,9 +134,9 @@ Git worktrees prevent ordinary working-tree collisions but do not provide a secu
 Work Unit classified `untrusted` or `destructive` is **refused** rather than run in one, because no
 shipped adapter offers the isolation it requires. See [security-policy.md](security-policy.md).
 
-The refusal logic is implemented in `src/security/risk.ts` and covered by `tests/security.test.ts`,
-but it is not on the composed path — see the annotation above. The policy is the intended state; the
-CLI does not yet enforce it.
+The refusal is enforced by the pipeline and covered by `tests/security.test.ts`. Risk signals are
+declared on the plan, never inferred from the goal text — see
+[security-policy.md](security-policy.md) for what that does and does not buy you.
 
 ## V1 boundary
 Local-first, no hosted control plane, no custom agent runtime, no database, no web dashboard, no
