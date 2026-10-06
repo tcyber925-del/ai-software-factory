@@ -29,6 +29,7 @@ factory doctor
 | `--work-units <path>` | A plan: JSON array of `{ workUnit, dependsOn?, paths?, contracts?, runtimes?, protectedResources? }` |
 | `--runtime <name>` | Restrict dispatch to one runtime. An unknown name is an error, never a silent substitution |
 | `--max-parallel <n>` | Bound concurrency inside one batch |
+| `--no-strict-scope` | Report out-of-scope changes without blocking integration |
 | `--prompt-timeout-ms <n>` | Ceiling on one agent prompt (default 900000) |
 | `--verify-in <where>` | `worktree` (default) or `repo` — see below |
 | `--json` | Machine-readable output |
@@ -128,6 +129,30 @@ project does not ship the factory's `schemas/`, and `doctor` does not require it
 so a cwd-only lookup would make `doctor` report a healthy environment and then fail
 the moment `work validate` ran. Check and action have to agree on where the contract
 lives.
+
+## Scope enforcement
+
+A Work Unit's declared `paths` are a **write boundary**, not a hint. After verification passes and
+before the integration gate, the pipeline reads the worktree's diff and compares it against the
+declaration. A change outside it is recorded as a durable `scope.violation` event naming every file,
+and by default prevents `ready` — the reason names the files, because the worktree is cleaned up by
+the time an operator looks.
+
+Ordering is deliberate: checks decide whether the work is correct, and only a correct run is worth
+asking whether it stayed inside its boundary. A run that is both broken and out of scope reports
+both, with the failed checks leading.
+
+Three outcomes, none of them a silent pass:
+
+| Situation | Result |
+|---|---|
+| Changes within `paths` | `ready` |
+| Changes outside `paths` | Blocked, files named. `--no-strict-scope` downgrades to a warning |
+| No `paths` declared | No gate; recorded as `undeclared`, never as "in scope" |
+| Diff unreadable | The run **fails**. A scope check that degrades to "no changes" is the false green this replaces |
+
+**This is an audit and a gate, not a sandbox.** A determined agent can still do damage inside a
+declared path, and it can damage a worktree it is not supposed to reach before the diff is read.
 
 ## Scheduling semantics
 

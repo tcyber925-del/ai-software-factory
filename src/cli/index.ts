@@ -10,6 +10,7 @@ import { validateWorkUnit } from "../kernel/work-unit.js";
 import { formatDoctorReport, runDoctor } from "../doctor/doctor.js";
 import { createSystemProbe } from "../doctor/probe.js";
 import { JsonlEventLog } from "../state/event-log.js";
+import { gitChangedFiles } from "../adapters/git/changes.js";
 import { FakeRuntime } from "../fake-runtime.js";
 import { OpenCodeRuntime } from "../adapters/opencode/runtime.js";
 import { HerdrRuntime } from "../adapters/herdr/runtime.js";
@@ -187,6 +188,11 @@ async function workRun(args: ParsedArgs, context: RunContext): Promise<CommandOu
     eventLog,
     ...(verifyInFlag === undefined ? {} : { verifyIn: verifyInFlag }),
     ...(maxParallel === undefined || Number.isNaN(maxParallel) ? {} : { maxParallel }),
+    // Scope enforcement is on wherever `paths` are declared. `--no-strict-scope`
+    // downgrades a violation to a warning for the case where a Work Unit legitimately
+    // needs to touch more than it predicted.
+    changedFiles: gitChangedFiles,
+    ...(args.booleans.has("no-strict-scope") ? { strictScope: false } : {}),
   });
 
   return { exitCode: result.status === "ready" ? 0 : 1, lines: renderPipeline(result, args.booleans.has("json")) };

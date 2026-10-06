@@ -82,6 +82,7 @@ export const USAGE = [
   "  --max-parallel <n>    Bound concurrency inside one batch",
   "  --prompt-timeout-ms <n>  Ceiling on one agent prompt (default 900000)",
   "  --verify-in <where>   'worktree' (default, verifies the executed tree) or 'repo'",
+  "  --no-strict-scope     Report out-of-scope changes without blocking integration",
   "  --json                Emit machine-readable output",
   "  --debug               Include a stack trace on failure",
   "  --help                Show this message",

@@ -1,14 +1,18 @@
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { IntegrationResult, VerificationResult, WorkUnit } from "../protocol.js";
 import type { ExecutionFailure, ExecutionRecord } from "./execution.js";
 import { executeWorkUnit } from "./execution.js";
-import { buildIntegrationResult } from "./integration.js";
+import { blockingReasonFor, buildIntegrationResult } from "./integration.js";
 import { runRepairLoop } from "./repair.js";
 import type { RepairPolicy } from "./repair.js";
 import { validateWorkUnit } from "./work-unit.js";
 import { evaluateSecurityGate, persistSecurityDecision } from "../security/index.js";
 import type { SecurityGateResult } from "../security/index.js";
 import type { ExecutionRiskInput } from "../security/risk.js";
+import type { ChangedFiles } from "../adapters/git/changes.js";
+import { checkScope, describeScopeViolation } from "./scope.js";
+import type { ScopeCheck } from "./scope.js";
 import type { LabelledRuntime } from "./work-unit.js";
 import type { JsonSchema } from "./json-schema.js";
 import type { PlanScheduleOptions, ScheduledWorkUnit, SchedulePlan } from "./scheduler.js";
@@ -51,6 +55,8 @@ export interface UnitRun {
   repairAttempts?: number;
   repairReason?: string;
   failure?: ExecutionFailure;
+  /** Present when a scope check ran. */
+  scope?: ScopeCheck;
 }
 
 export interface PipelineResult {
@@ -80,6 +86,18 @@ export interface RunPipelineOptions {
    * factory is verifying its own checkout.
    */
   verifyIn?: "worktree" | "repo";
+  /**
+   * Reports the files the Work Unit changed, so its declared `paths` can be
+   * enforced rather than merely documented. Omitted means no scope gate, which the
+   * result records rather than treating as a pass.
+   */
+  changedFiles?: ChangedFiles;
+  /**
+   * Whether an out-of-scope change prevents `ready`. Defaults to `true` where
+   * `paths` are declared: the point is to make the boundary real, and an opt-in gate
+   * would leave the default advisory — the defect this replaces.
+   */
+  strictScope?: boolean;
   id?: () => string;
   now?: () => string;
 }
@@ -118,7 +136,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<Pipeline
         slice.map(async (workUnitId) => {
           const scheduled = options.workUnits.find((candidate) => candidate.workUnit.id === workUnitId);
           if (scheduled === undefined) throw new Error(`scheduler produced an unknown work unit: ${workUnitId}`);
-          return runOne(scheduled.workUnit, scheduled.risk, options, eventLog, id, now);
+          return runOne(scheduled.workUnit, scheduled.risk, scheduled.paths, options, eventLog, id, now);
         }),
       );
       results.push(...settled);
@@ -272,10 +290,83 @@ async function releaseWorkspace(
   }
 }
 
+/**
+ * Compares what the run changed against what it declared it would change.
+ *
+ * Three outcomes, all explicit:
+ *
+ * - **No provider** — scope could not be checked. Recorded as `unchanged: true` with
+ *   nothing changed, and reported through the reason, because "not checked" must
+ *   not read as "in scope".
+ * - **No declared `paths`** — no gate. A Work Unit that says nothing about its
+ *   surface gets no boundary; `undeclared` records that so it is never mistaken for
+ *   a narrowly-scoped one.
+ * - **Declared** — out-of-scope files are named, and under the default strict mode
+ *   they prevent `ready`.
+ */
+async function evaluateScope(
+  workUnit: WorkUnit,
+  declaredPaths: string[] | undefined,
+  options: RunPipelineOptions,
+  worktreePath: string | undefined,
+  verifyIn: "worktree" | "repo",
+  eventLog: EventLog | undefined,
+  runId: string,
+  id: () => string,
+  now: () => string,
+): Promise<ScopeCheck | undefined> {
+  if (options.changedFiles === undefined) return undefined;
+
+  // Repo-scoped verification means the work happened somewhere this call cannot
+  // see, so there is nothing to compare and nothing to claim.
+  if (verifyIn === "repo" || worktreePath === undefined) {
+    return { changed: [], outOfScope: [], undeclared: declaredPaths === undefined };
+  }
+
+  // A runtime that produces no real tree — the fake runtime, by design — leaves
+  // nothing to diff. Returning no result makes no claim either way, which is the
+  // honest answer: scope was not checked, and it is not reported as in scope.
+  if (!existsSync(worktreePath)) return undefined;
+
+  let changed: string[];
+  try {
+    changed = await options.changedFiles(worktreePath);
+  } catch (error) {
+    // A diff that could not be read is not a clean bill of health. Reported as a
+    // failure so it cannot be mistaken for "no changes".
+    throw new Error(
+      `scope check for ${workUnit.id} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const check = checkScope(changed, declaredPaths);
+  const strict = options.strictScope !== false;
+
+  if (check.outOfScope.length > 0) {
+    await eventLog?.append([
+      {
+        workUnitId: workUnit.id,
+        runId,
+        source: "factory",
+        type: strict ? "scope.violation" : "scope.warning",
+        payload: {
+          declaredPaths: declaredPaths ?? [],
+          outOfScope: check.outOfScope.map((change) => change.file),
+          lockfiles: check.outOfScope.filter((change) => change.lockfile).map((change) => change.file),
+          strict,
+        },
+      },
+    ]);
+  }
+
+  return check;
+}
+
 /** One Work Unit through the whole sequence. */
 async function runOne(
   workUnit: WorkUnit,
   risk: ExecutionRiskInput | undefined,
+  declaredPaths: string[] | undefined,
   options: RunPipelineOptions,
   eventLog: EventLog | undefined,
   id: () => string,
@@ -450,10 +541,50 @@ async function runOne(
       return output.result;
     }
 
+    /**
+     * Scope enforcement — after verification, before the integration gate.
+     *
+     * Ordering matters: the checks decide whether the work is correct, and only a
+     * correct run is worth asking whether it stayed inside its boundary. Running it
+     * earlier would report a scope violation for work that turned out to be broken
+     * anyway; running it later would mean the gate had already passed.
+     *
+     * The worktree is still live here — cleanup is deferred to the `finally` — so
+     * the diff can be read.
+     */
+    const scope = await evaluateScope(
+      workUnit,
+      declaredPaths,
+      options,
+      execution.worktreePath,
+      verifyIn,
+      eventLog,
+      runId,
+      id,
+      now,
+    );
+
+    const scopeStrict = options.strictScope !== false && scope !== undefined && scope.outOfScope.length > 0;
+
+    // When the checks also failed, that verdict leads: the work is wrong regardless
+    // of where it touched. The scope violation is appended rather than dropped,
+    // because reporting only one of two real problems hides the other. When the
+    // checks passed, scope is the sole reason — `verification_passed` would be
+    // literally true and completely misleading.
+    const verificationReason = blockingReasonFor(execution, verification);
+    const scopeReason = scopeStrict ? describeScopeViolation(scope) : undefined;
+    const combinedReason =
+      scopeReason === undefined
+        ? undefined
+        : verificationReason === undefined || verificationReason === "verification_passed"
+          ? scopeReason
+          : `${verificationReason}; ${scopeReason}`;
+
     const integrationOutcome = await buildIntegrationResult({
       execution,
       verification,
       runId,
+      ...(combinedReason === undefined ? {} : { scopeReason: combinedReason }),
       ...(eventLog === undefined ? {} : { eventLog }),
       id,
       now,
@@ -478,6 +609,7 @@ async function runOne(
       verification,
       integration: integrationOutcome.result,
     };
+    if (scope !== undefined) run.scope = scope;
     if (repairAttempts !== undefined) run.repairAttempts = repairAttempts;
     if (repairReason !== undefined) run.repairReason = repairReason;
     if (execution?.failure !== undefined) run.failure = execution.failure;

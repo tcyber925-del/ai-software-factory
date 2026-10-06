@@ -304,7 +304,26 @@ Commit `checks.json` so the whole team verifies the same way.
 
 The `goal` is what the agent is asked to do; `paths` is what it is allowed to
 touch. Keep `paths` tight and specific — it is how the scheduler knows two units
-can run in parallel:
+can run in parallel, **and it is enforced**: a change outside them is recorded as a
+`scope.violation` event and prevents the run reaching `ready`.
+
+A declared path covers an exact file or everything beneath it as a directory:
+
+| Declared | Covers |
+|---|---|
+| a directory, e.g. `src/kernel` | every file beneath it |
+| a file, e.g. `src/protocol.ts` | only that file |
+
+Matching is by normalized path prefix, not substring: declaring a directory does
+**not** cover a sibling whose name merely starts with the same characters.
+
+If a Work Unit legitimately needs to touch more than it predicted, widen `paths` or
+pass `--no-strict-scope` for that run. Narrow the declaration rather than the gate —
+the gate is the thing that tells you the prediction was wrong.
+
+If a Work Unit declares **no** `paths` there is no scope gate at all, and the result
+records `undeclared`. That is not the same as "in scope", and the difference is
+recorded rather than assumed.
 
 ```json
 [
@@ -496,6 +515,7 @@ Read these before you rely on the factory.
 | **No SCM adapter** | The factory never opens a PR or pushes a branch. You close the loop |
 | **`init`, `work create`, `work status`, `workspace list` are not implemented** | The specified CLI surface is narrower than documented in the plan |
 | **A dispatched worktree has no installed dependencies** | It is a fresh checkout, so `npm test` cannot run in it. Your checks must install dependencies first — see below |
+| **Scope is enforced where declared** | `paths` is now a gate: an out-of-scope change blocks `ready`. A Work Unit that declares no `paths` gets no gate, and that is recorded as `undeclared` rather than assumed in-scope. `--no-strict-scope` downgrades to a warning |
 | **Security risk signals are declared, not detected** | `work run` refuses `untrusted`/`destructive` work — but only from signals you declare on the plan. It does **not** read the goal to guess. See below |
 | **Linear intake is not on the dispatch path** | `src/adapters/linear/` ships and is tested, but no CLI command reads it. Use the library directly |
 | **`factory verify` only knows npm scripts** | It runs the project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |

@@ -16,6 +16,16 @@ export interface BuildIntegrationOptions {
   execution: ExecutionRecord;
   verification: VerificationResult;
   commit?: string;
+  /**
+   * An independent reason this run must not be integrated, outranking a passing
+   * verification verdict.
+   *
+   * Supplied by the pipeline for a scope violation. Without it a run whose checks
+   * passed reports `verification_passed`, which would be true and misleading — the
+   * operator would read a green result while the work had crossed its declared
+   * boundary.
+   */
+  scopeReason?: string;
   /** When provided, the integration outcome is persisted durably. */
   eventLog?: EventLog;
   runId?: string;
@@ -39,7 +49,7 @@ export async function buildIntegrationResult(options: BuildIntegrationOptions): 
     events.push({ id: id(), workUnitId: execution.workUnitId, type, timestamp: now(), payload });
   };
 
-  const blocker = blockingReason(execution, verification);
+  const blocker = options.scopeReason ?? blockingReason(execution, verification);
   const verificationAttempts = verification.attempt ?? 1;
   const payload = {
     verificationStatus: verification.status,
@@ -83,6 +93,16 @@ export async function buildIntegrationResult(options: BuildIntegrationOptions): 
  * Work Unit whose checks passed is judged on its own evidence rather than on how
  * the runtime happened to exit.
  */
+/**
+ * The reason this run cannot be integrated, or undefined when it can.
+ *
+ * Exported so the pipeline can combine it with a scope violation without
+ * duplicating the precedence rules — two copies of "which problem leads" would drift.
+ */
+export function blockingReasonFor(execution: ExecutionRecord, verification: VerificationResult): string | undefined {
+  return blockingReason(execution, verification);
+}
+
 function blockingReason(execution: ExecutionRecord, verification: VerificationResult): string | undefined {
   if (verification.workUnitId !== execution.workUnitId) {
     return "verification_work_unit_mismatch";
