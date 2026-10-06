@@ -28,15 +28,14 @@ Composed by `factory work run`:
 - Bounded repair, then escalation at the limit
 - Integration gate and durable event log
 
-Shipped as libraries, **not** called by `work run`:
+Shipped as a library, **not** called by `work run`:
 
 | Capability | Module | Consequence |
 |---|---|---|
-| Security risk classification and the isolation gate | `src/security/` | A `untrusted` or `destructive` Work Unit is **not** refused at dispatch today; the caller must apply `evaluateSecurityGate` itself |
 | Linear intake and status reflection | `src/adapters/linear/` | No CLI command reads Linear; intake is a library call |
 
-`docs/security-policy.md` and `docs/linear-adapter.md` document the intended behaviour. This table
-records what the CLI actually does.
+`docs/linear-adapter.md` documents the intended behaviour. This table records what the CLI actually
+does.
 
 ## Core invariant
 
@@ -224,11 +223,11 @@ shipped code.
 |---|---|
 | `factory verify` is narrow | It runs the target project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |
 | Verification defaults to `npm test` | A project verifying another way passes `--checks <file.json>`; an empty list is refused |
-| Security gate is not composed | `src/security/` is never called from `src/kernel/pipeline.ts`, so higher-risk work is not refused at dispatch |
+| Security risk signals are declared, not detected | The gate refuses `untrusted`/`destructive` work, but only from signals declared on the plan. It does not read the goal text to guess |
 | Linear intake is not composed | `src/adapters/linear/` has no CLI command; the "intake refused" path in the pipeline reads scheduler decisions |
 | CLI surface is narrower than the plan | Implemented: `work run`, `work validate`, `verify`, `doctor`. Not implemented: `init`, `work create`, `work status`, `workspace list` |
 | No SCM adapter | PR creation and merge stay human-led; the factory records the decision only |
-| No sandbox adapter | Nothing offers `sandbox` isolation, so `untrusted` and `destructive` work would be refused — if the gate were applied |
+| No sandbox adapter | Nothing offers `sandbox` isolation, so `untrusted` and `destructive` work is **refused** at dispatch rather than run weakly |
 | Adapters organised by provider | `src/adapters/{opencode,herdr,hermes,linear,verification}` rather than the plan's role-based directories |
 | The plan's skills directory is not used | Skills live under `.agents/skills/`, as the Protocols spec requires |
 

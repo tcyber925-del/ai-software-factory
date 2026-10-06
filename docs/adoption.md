@@ -162,16 +162,15 @@ inside the skill.
 
 Neither is fixed for you, and neither is caught by `npm run verify`:
 
-1. **The security gate is not composed into `work run`.** `src/security/` implements risk
-   classification and the isolation gate, but `src/kernel/pipeline.ts` never calls it. Until you
-   compose it, `factory work run` will not refuse `untrusted` or `destructive` Work Units even though
-   no adapter offers the `sandbox` isolation they require. See
-   [security-policy.md](security-policy.md#not-enforced-at-dispatch).
-2. **`factory verify` will fail** until you define `format:check`, `lint`, and `typecheck`. See
-   [cli.md](cli.md).
+1. **Declare the security signals on your plans.** `work run` refuses `untrusted` and
+   `destructive` work, but only from signals you declare — it will not read the goal text and guess.
+   A plan with no `risk` block is treated as `trusted`. See
+   [security-policy.md](security-policy.md#how-risk-is-declared-and-what-that-means).
+2. **`factory verify` runs your project's own scripts.** If it declares none of `verify`,
+   `format:check`, `lint`, `typecheck`, `test`, or `build`, the command fails rather than reporting
+   a vacuous pass. See [cli.md](cli.md).
 
-Both are library-versus-wiring gaps: the code exists and is tested, which is precisely why a green
-suite does not catch them.
+---
 
 ## What the factory will not do for you
 

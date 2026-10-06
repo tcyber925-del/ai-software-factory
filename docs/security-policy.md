@@ -69,22 +69,50 @@ level it provides, and admission compares levels rather than checking for one sp
 container platform, remote execution service, or secrets manager is built here; this only defines the
 boundary such an adapter must satisfy.
 
-## Not enforced at dispatch
+## Enforced at dispatch
 
-This policy is implemented and tested, but it is not wired into the run path.
+The gate runs in `src/kernel/pipeline.ts` **before** anything is dispatched: before a workspace is
+created, before a worktree is checked out, before a runtime is invoked. A refusal is of the work, not
+of its consequences, so the refusal itself has no evidence to clean up.
 
-`evaluateSecurityGate` has no caller in `src/kernel/pipeline.ts`, and no CLI command applies it. So
-the refusals described above — a `untrusted` Work Unit requiring `sandbox`, a direct push to a
-protected branch, a production credential request — are available to a caller that chooses to use the
-library, and are **not** currently applied by `factory work run`.
+Each decision is persisted as a durable `factory` event — `security.allowed` or `security.blocked`
+— for admitted work as well as refused work. An audit that recorded only refusals could not show what
+was allowed and why.
 
-That is the most consequential gap in the factory, and it is the one most likely to be misread. The
-policy above describes what the code *can* do; a reader who assumes `work run` applies it would
-believe higher-risk work is being refused when it is not. There is no sandbox adapter, so the
-`untrusted` refusal is the one that would actually fire.
+## How risk is declared, and what that means
 
-Composing the gate into the pipeline is a change to the run path and belongs in its own Work Unit.
-See [cli.md](cli.md#what-the-pipeline-does-not-compose) and [architecture.md](architecture.md).
+Risk signals are **declared, never inferred.** They live on the plan beside the Work Unit, not on the
+Work Unit itself, because risk is a property of a dispatch rather than of the portable contract:
+
+```json
+{
+  "workUnit": { "id": "W-1", "goal": "Summarise customer-uploaded files", "...": "..." },
+  "paths": ["src/summarise"],
+  "risk": { "consumesUntrustedContent": true }
+}
+```
+
+The factory does **not** read the goal text and guess. Inferring "consumes untrusted content" from
+the word *untrusted* in a goal would be a guess dressed as a control — precisely the failure mode
+this factory exists to prevent. A declared risk may raise the classification; it can never lower it,
+and a refused downgrade is recorded as a reason.
+
+**The honest limitation: absence of a declaration is not evidence of safety.** An operator who
+declares nothing gets `trusted`, which a worktree satisfies. The gate enforces declarations; it is
+not content analysis, and it cannot become content analysis without either a reliable classifier or
+accepting that the classification is a guess.
+
+## `providedIsolation` is what the dispatch path provides
+
+The gate compares the required isolation against the isolation the path actually offers — here
+`git_worktree`, because `executeWorkUnit` creates a worktree before it starts an agent and refuses to
+start one without.
+
+This is the easiest thing to get wrong. `providedIsolation` defaults to `none`, and even `trusted`
+work requires `git_worktree`, so passing the default would refuse **100% of work**, trusted included.
+A gate that refuses everything is not a security control; it is an outage with a reassuring name.
+There is a test asserting ordinary trusted work is admitted, because a suite of "it refuses untrusted
+work" tests would all still pass against that failure.
 
 ## Auditability
 

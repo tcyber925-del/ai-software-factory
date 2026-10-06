@@ -97,20 +97,17 @@ verifying its own checkout.
 
 ### What the pipeline does not compose
 
-The pipeline is not the whole factory. Two shipped capabilities are library-only
-and are **not** invoked by `factory work run`:
+One shipped capability remains library-only and is **not** invoked by
+`factory work run`:
 
 | Capability | Module | Who applies it |
 | --- | --- | --- |
-| Security gate: risk classification → required isolation | `src/security/` | The caller. Nothing in the CLI applies it |
 | Linear intake and status reflection | `src/adapters/linear/` | The caller. No CLI command reads Linear |
 
-
-The security gap is the one with teeth. `docs/security-policy.md` states that
-`untrusted` and `destructive` work must be **refused** without `sandbox` isolation,
-and no adapter offers one. That refusal does not happen on the CLI path, because
-`evaluateSecurityGate` has no caller in `src/kernel/pipeline.ts`. The policy is
-implemented and tested; it is just not wired into dispatch.
+The security gate **is** composed. It runs before dispatch and refuses
+`untrusted` and `destructive` work, because no adapter offers the `sandbox`
+isolation those classes require. Risk signals are declared on the plan, never
+inferred from the goal text — see [security-policy.md](security-policy.md).
 
 The `intakeBlocked` check in the pipeline is not Linear intake. It reads
 `planSchedule` decisions, so it reports a Work Unit the *scheduler* refused — an

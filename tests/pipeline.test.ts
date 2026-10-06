@@ -458,3 +458,109 @@ describe("the pipeline refuses to dispatch an invalid Work Unit", () => {
     ).rejects.toThrow(/failed validation and must not be dispatched/);
   });
 });
+
+/**
+ * The security gate on the dispatch path.
+ *
+ * Before this, `evaluateSecurityGate` had no caller in the pipeline: a Work Unit
+ * classified `untrusted` was dispatched anyway, the runtime was invoked, and the
+ * event log recorded zero security events. These tests pin the composed behaviour.
+ */
+
+describe("the security gate is applied before dispatch", () => {
+  const signals = (extra: Partial<ScheduledWorkUnit> = {}): ScheduledWorkUnit[] => [
+    { workUnit: { ...unit("SEC-1").workUnit, capabilities: ["testing"] }, paths: ["src/sec"], ...extra },
+  ];
+
+  const run = async (workUnits: ScheduledWorkUnit[]) => {
+    const log = new InMemoryEventLog();
+    const result = await runPipeline({
+      workUnits,
+      schema,
+      runtimes: [runtime()],
+      checks,
+      cwd: ".",
+      eventLog: log,
+      runner: passing,
+      ...clock(),
+    });
+    return { result, log };
+  };
+
+  it("admits ordinary trusted work", async () => {
+    // The regression this guards: `providedIsolation` defaults to `none`, and even
+    // trusted work requires `git_worktree`. Composing the gate without threading
+    // through the runtime's real isolation would refuse 100% of work and still
+    // satisfy every "it refuses untrusted work" test.
+    const { result } = await run(signals());
+    expect(result.status).toBe("ready");
+    expect(result.runs[0]?.outcome).toBe("ready");
+  });
+
+  it("refuses untrusted work, naming the reason", async () => {
+    const { result } = await run(signals({ risk: { consumesUntrustedContent: true } }));
+    expect(result.status).toBe("blocked");
+    expect(result.runs[0]?.outcome).toBe("blocked");
+    expect(result.runs[0]?.integration.reason).toMatch(/security gate refused/);
+    expect(result.runs[0]?.integration.reason).toMatch(/untrusted|factory did not author/i);
+  });
+
+  it("refuses destructive work", async () => {
+    const { result } = await run(signals({ risk: { touchesProduction: true } }));
+    expect(result.status).toBe("blocked");
+    expect(result.runs[0]?.integration.reason).toMatch(/production|sandbox/i);
+  });
+
+  it("refuses before any runtime is invoked", async () => {
+    // Asserted against the durable log rather than the returned record. Checking
+    // `execution.events` would pass even if the runtime had already run, because
+    // the refusal constructs an empty record by hand — which is exactly the case
+    // that a weaker test let through.
+    const { result, log } = await run(signals({ risk: { executesArbitraryCommands: true } }));
+    const types = log.stored().map((event) => event.type);
+    expect(types).not.toContain("worker.started");
+    expect(types).not.toContain("workspace.created");
+    expect(types).not.toContain("worktree.created");
+
+    expect(result.runs[0]?.outcome).toBe("blocked");
+    expect(result.runs[0]?.execution.status).toBe("blocked");
+  });
+
+  it("records the decision as a durable factory event", async () => {
+    const { log } = await run(signals({ risk: { consumesUntrustedContent: true } }));
+    const types = log.stored().map((event) => event.type);
+    expect(types).toContain("security.blocked");
+    expect(types).not.toContain("worker.started");
+
+    const blocked = log.stored().find((event) => event.type === "security.blocked");
+    expect(blocked?.source).toBe("factory");
+    expect(blocked?.payload).toMatchObject({ allowed: false, kind: "execution_blocked" });
+  });
+
+  it("records the decision for admitted work too", async () => {
+    // An audit that only logged refusals could not show what was allowed and why.
+    const { log } = await run(signals());
+    expect(log.stored().map((event) => event.type)).toContain("security.allowed");
+  });
+
+  it("never verifies a refused Work Unit", async () => {
+    const { log } = await run(signals({ risk: { touchesProduction: true } }));
+    expect(log.stored().map((event) => event.type)).not.toContain("verification.started");
+  });
+
+  it("halts dependent batches when the gate refuses", async () => {
+    const { result } = await run([
+      { workUnit: { ...unit("A").workUnit, capabilities: ["testing"] }, paths: ["src/a"], risk: { touchesProduction: true } },
+      { workUnit: { ...unit("B").workUnit, capabilities: ["testing"] }, paths: ["src/b"], dependsOn: ["A"] },
+    ]);
+    expect(result.status).toBe("blocked");
+    expect(result.notDispatched).toContain("B");
+  });
+
+  it("refuses a declared downgrade rather than honouring it", async () => {
+    // A Work Unit asserting `trusted` while declaring it consumes untrusted
+    // content must not get the weaker classification.
+    const { result } = await run(signals({ risk: { consumesUntrustedContent: true, declaredRisk: "trusted" } }));
+    expect(result.status).toBe("blocked");
+  });
+});

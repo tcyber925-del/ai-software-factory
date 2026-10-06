@@ -6,6 +6,9 @@ import { buildIntegrationResult } from "./integration.js";
 import { runRepairLoop } from "./repair.js";
 import type { RepairPolicy } from "./repair.js";
 import { validateWorkUnit } from "./work-unit.js";
+import { evaluateSecurityGate, persistSecurityDecision } from "../security/index.js";
+import type { SecurityGateResult } from "../security/index.js";
+import type { ExecutionRiskInput } from "../security/risk.js";
 import type { LabelledRuntime } from "./work-unit.js";
 import type { JsonSchema } from "./json-schema.js";
 import type { PlanScheduleOptions, ScheduledWorkUnit, SchedulePlan } from "./scheduler.js";
@@ -115,7 +118,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<Pipeline
         slice.map(async (workUnitId) => {
           const scheduled = options.workUnits.find((candidate) => candidate.workUnit.id === workUnitId);
           if (scheduled === undefined) throw new Error(`scheduler produced an unknown work unit: ${workUnitId}`);
-          return runOne(scheduled.workUnit, options, eventLog, id, now);
+          return runOne(scheduled.workUnit, scheduled.risk, options, eventLog, id, now);
         }),
       );
       results.push(...settled);
@@ -186,9 +189,48 @@ function blockedWithoutVerification(
   };
 }
 
+/**
+ * A refusal by the security gate, shaped like every other `UnitRun`.
+ *
+ * Returned as a full record rather than a bare reason so that a caller inspecting
+ * only part of the result cannot read a refusal as a pass. The runtime was never
+ * invoked, so there is no execution evidence to report.
+ */
+function blockedBySecurityGate(
+  workUnit: WorkUnit,
+  runId: string,
+  admission: SecurityGateResult,
+): UnitRun {
+  const reason = `security gate refused: ${admission.blockers.map((blocker) => blocker.reason).join("; ")}`;
+  const verification: VerificationResult = {
+    workUnitId: workUnit.id,
+    status: "blocked",
+    checks: [],
+  };
+  return {
+    workUnitId: workUnit.id,
+    outcome: "blocked",
+    execution: {
+      workUnitId: workUnit.id,
+      status: "blocked",
+      events: [],
+      failure: "blocked",
+    },
+    verification,
+    integration: {
+      workUnitId: workUnit.id,
+      state: "blocked",
+      reason,
+      verification,
+      events: [],
+    },
+  };
+}
+
 /** One Work Unit through the whole sequence. */
 async function runOne(
   workUnit: WorkUnit,
+  risk: ExecutionRiskInput | undefined,
   options: RunPipelineOptions,
   eventLog: EventLog | undefined,
   id: () => string,
@@ -208,6 +250,37 @@ async function runOne(
   }
 
   const runId = `run-${workUnit.id}-${randomUUID().slice(0, 8)}`;
+
+  /**
+   * Security gate — evaluated *before* anything is dispatched.
+   *
+   * Ordering is the whole point. A refusal after the runtime has been invoked and a
+   * worktree created would be a refusal of the consequences, not of the work.
+   *
+   * `providedIsolation` is `git_worktree` because that is what the dispatch path
+   * provides: `executeWorkUnit` creates a worktree before it starts an agent and
+   * refuses to start one without. Passing `none` here would be the tempting mistake
+   * — `adequate` would be false for *every* Work Unit, including trusted ones, and
+   * the gate would refuse all work rather than the risky work.
+   */
+  const admission = evaluateSecurityGate({
+    workUnitId: workUnit.id,
+    risk: risk ?? {},
+    providedIsolation: "git_worktree",
+    targetBranch: workUnit.baseRevision ?? "HEAD",
+    writeMode: "pull_request",
+  });
+  if (eventLog !== undefined) {
+    // Each decision is persisted individually, because a gate returns several and
+    // an audit that recorded only "the result" could not say which control fired.
+    for (const decision of admission.decisions) {
+      await persistSecurityDecision(decision, { eventLog, runId, workUnitId: workUnit.id, now });
+    }
+  }
+  if (!admission.admitted) {
+    return blockedBySecurityGate(workUnit, runId, admission);
+  }
+
   const base = {
     schema,
     runtimes,
