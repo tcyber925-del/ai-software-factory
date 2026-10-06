@@ -438,3 +438,18 @@ describe("factory verify reads the project's own checks", () => {
     expect(result.lines.join("\n")).not.toMatch(/verification passed/);
   });
 });
+
+describe("the prompt timeout is an operator recourse", () => {
+  it("refuses a non-positive or non-numeric value rather than silently defaulting", async () => {
+    const units = writeUnits("prompt-timeout", [{ workUnit: validWire }]);
+    for (const value of ["0", "-5", "abc", ""]) {
+      const result = await run(["work", "run", "--work-units", units, "--prompt-timeout-ms", value]);
+      expect(result.exitCode, `value '${value}' should be refused`).toBe(1);
+    }
+  });
+
+  it("reports the bound in help so it is discoverable", async () => {
+    const result = await run(["--help"]);
+    expect(result.lines.join("\n")).toMatch(/--prompt-timeout-ms/);
+  });
+});

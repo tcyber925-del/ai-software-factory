@@ -270,6 +270,20 @@ node dist/bin.js work run \
 Checks run **inside the worktree the agent produced**, so they test what was written
 rather than what was already there.
 
+**A worktree is a fresh Git checkout, so it has no `node_modules`.** Any check that
+needs dependencies must install them first:
+
+```json
+[
+  { "name": "install", "command": "npm", "args": ["ci"] },
+  { "name": "typecheck", "command": "npm", "args": ["run", "build"] },
+  { "name": "test", "command": "npm", "args": ["test"] }
+]
+```
+
+Without that, `npm test` fails in the worktree with a confusing "tsc not found" and
+the Work Unit is blocked for the wrong reason.
+
 An empty list is refused. `[]` would mean "pass", because nothing failed — which is
 exactly the outcome independent verification exists to prevent.
 
@@ -470,6 +484,7 @@ Read these before you rely on the factory.
 |---|---|
 | **No SCM adapter** | The factory never opens a PR or pushes a branch. You close the loop |
 | **`init`, `work create`, `work status`, `workspace list` are not implemented** | The specified CLI surface is narrower than documented in the plan |
+| **A dispatched worktree has no installed dependencies** | It is a fresh checkout, so `npm test` cannot run in it. Your checks must install dependencies first — see below |
 | **The security gate is not on the dispatch path** | `src/security/` classifies risk and would refuse `untrusted`/`destructive` work, but `work run` never calls it. **Such work currently runs.** See below |
 | **Linear intake is not on the dispatch path** | `src/adapters/linear/` ships and is tested, but no CLI command reads it. Use the library directly |
 | **`factory verify` only knows npm scripts** | It runs the project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |

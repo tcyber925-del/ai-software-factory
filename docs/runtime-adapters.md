@@ -56,6 +56,33 @@ all four are verified before a run.
 ## Agent-native orchestration
 An agent may request bounded orchestration actions when policy permits. Such actions remain children of a parent Work Unit, are traceable, and cannot bypass verification or integration gates. The Hermes adapter is the shipped example: it can run checks, but its `capabilities()` deliberately exclude `verification`, and neither `VerificationResult` nor `IntegrationResult` is ever computed from its state.
 
+## Every call is bounded
+
+No shipped adapter may wait indefinitely on a process. `opencode run` is a
+subprocess that can wedge — a provider that stalls, a lock held, a socket that
+never closes — and an unbounded call turns a stuck runtime into a dispatch that
+hangs forever **with no error recorded**. A log that never resolves is worse than a
+crash, because it reads as work-in-progress indefinitely.
+
+| Bound | Default | Where |
+|---|---|---|
+| One agent prompt | 900s | `DEFAULT_PROMPT_TIMEOUT_MS`, overridable per runtime |
+| Any other subprocess (`git`, `--version`) | 120s | `DEFAULT_COMMAND_TIMEOUT_MS` |
+| Waiting for an agent to settle | `timeoutMs` from `waitAgent` | the caller's budget |
+
+An expired call raises the `timeout` `RuntimeFailure`, which `execution.ts` records
+as a `runtime.failure` **factory** event before cleanup runs. The timeout is
+detected from Node's own kill signal rather than a raced timer, so the child
+process is genuinely killed instead of being orphaned.
+
+`--prompt-timeout-ms` exposes the prompt ceiling, because a ceiling an operator
+cannot move is indistinguishable from a hang.
+
+**A defect found by dogfooding:** `waitAgent` declared a `timeoutMs` parameter and
+the OpenCode adapter discarded it (`_timeoutMs`), and `promptAgent` had no timeout
+at all. A real dispatch hung for 25 minutes and produced no evidence. Herdr and
+Hermes were checked and already honoured theirs.
+
 ## Failure semantics
 Adapters must distinguish at least:
 - unavailable
