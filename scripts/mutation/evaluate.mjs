@@ -235,12 +235,20 @@ export async function evaluateDefect(repoRoot, value, options = {}) {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? RUN_TIMEOUT_MS;
   const id = labelOf(value);
+  // The aim rides along on the outcome: the entry is in hand here, so
+  // threading it through ends any need for a downstream guard to re-read the
+  // corpus from disk to apply its floor. Absent, not guessed, when the entry
+  // did not name one.
+  const rawAimsAt =
+    value !== null && typeof value === "object" && !Array.isArray(value) ? value.aimsAt : undefined;
+  const aimsAt = present(rawAimsAt) ? rawAimsAt : undefined;
   const finish = (outcome, caughtBy, reason) => ({
     id,
     outcome,
     caughtBy,
     reason,
     durationMs: Date.now() - started,
+    ...(aimsAt === undefined ? {} : { aimsAt }),
   });
 
   const narrowed = narrowDefect(value);

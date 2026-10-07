@@ -34,6 +34,12 @@ export interface DefectOutcome {
   /** Why this outcome, in prose: a check that named it, or the problem that stopped it. */
   reason: string;
   durationMs: number;
+  /**
+   * The test file this defect aimed at, carried over from its corpus entry.
+   * Absent, not guessed, when the entry named no aim — so a downstream guard
+   * can tell "no aim" from "aim unknown at evaluation time".
+   */
+  aimsAt?: string;
 }
 
 export interface EvaluationOptions {

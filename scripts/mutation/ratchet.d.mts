@@ -15,9 +15,12 @@ export interface RatchetOutcome {
   outcome: string;
   /** Test files that failed only because of the mutation. */
   caughtBy?: string[];
-  /** The test file the defect was aimed at. Falls back to the corpus lookup by id. */
+  /** The test file the defect was aimed at. Falls back to the optional `aimsAtById` argument. */
   aimsAt?: string;
 }
+
+/** Id -> aimsAt index for outcomes that do not carry their own aim. */
+export type RatchetAimIndex = Map<string, string> | Record<string, string>;
 
 export interface RatchetVerdict {
   ok: boolean;
@@ -26,10 +29,13 @@ export interface RatchetVerdict {
 
 /**
  * Guards the corpus against being traded away quietly: fails when the corpus
- * shrank, when a defect escaped or could not be evaluated, or when a caught
- * defect's own `aimsAt` was not among the files that caught it.
+ * shrank, when a defect escaped or could not be evaluated, when a caught
+ * defect's own `aimsAt` was not among the files that caught it, when a
+ * caught defect's aim cannot be resolved, or when an outcome string is
+ * unrecognized. A pure function of its arguments — reads nothing from disk.
  */
 export declare function checkRatchet(
   ratchet: Ratchet,
   outcomes: RatchetOutcome[],
+  aimsAtById?: RatchetAimIndex,
 ): RatchetVerdict;

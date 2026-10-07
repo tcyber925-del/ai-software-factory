@@ -976,7 +976,12 @@ const checkRatchetTyped = checkRatchet as unknown as (
 ) => { ok: boolean; problems: string[] };
 
 describe("ratchet", () => {
-  const caught = (id: string) => ({ id, outcome: "caught" });
+  const caught = (id: string) => ({
+    id,
+    outcome: "caught",
+    aimsAt: "tests/a.test.ts",
+    caughtBy: ["tests/a.test.ts"],
+  });
 
   it("passes when every defect is caught and none were removed", () => {
     const result = checkRatchetTyped(
@@ -1051,5 +1056,95 @@ describe("ratchet aim floor", () => {
       { id: "a", outcome: "caught", aimsAt: "tests/a.test.ts", caughtBy: [] },
     ]);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("ratchet fail-closed floor and pure arguments", () => {
+  const checkRatchetWithIndex = checkRatchet as unknown as (
+    ratchet: { defects: number },
+    outcomes: Record<string, unknown>[],
+    aimsAtById?: Map<string, string> | Record<string, string>,
+  ) => { ok: boolean; problems: string[] };
+
+  it("uses a real corpus-shaped entry to prove the floor fails when the aim is omitted by the catchers", () => {
+    // A caught outcome whose own aim is absent from caughtBy must fail. This
+    // is the path the production evaluator drives (real id, real aimsAt,
+    // caughtBy that omits it), so it must be pinned by a committed test.
+    const { defects } = loadCorpus(process.cwd());
+    const defect = defects[0] as { id: string; aimsAt: string };
+    const result = checkRatchetWithIndex({ defects: 1 }, [
+      { id: defect.id, outcome: "caught", aimsAt: defect.aimsAt, caughtBy: ["tests/other.test.ts"] },
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toMatch(/aimsAt/);
+  });
+
+  it("pins the same production path when the aim comes from the explicit index instead of the outcome", () => {
+    const { defects } = loadCorpus(process.cwd());
+    const defect = defects[0] as { id: string; aimsAt: string };
+    const result = checkRatchetWithIndex(
+      { defects: 1 },
+      [{ id: defect.id, outcome: "caught", caughtBy: ["tests/other.test.ts"] }],
+      { [defect.id]: defect.aimsAt },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toMatch(/aimsAt/);
+  });
+
+  it("accepts the same index as a Map", () => {
+    const { defects } = loadCorpus(process.cwd());
+    const defect = defects[0] as { id: string; aimsAt: string };
+    const result = checkRatchetWithIndex(
+      { defects: 1 },
+      [{ id: defect.id, outcome: "caught", caughtBy: [defect.aimsAt] }],
+      new Map([[defect.id, defect.aimsAt]]),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it("fails closed when a caught defect's aimsAt cannot be resolved at all", () => {
+    const result = checkRatchetWithIndex({ defects: 1 }, [
+      { id: "a", outcome: "caught", caughtBy: ["tests/a.test.ts"] },
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toMatch(/aimsAt could not be checked/);
+  });
+
+  it("does not consult the shipped corpus: a real corpus id with no aim anywhere still fails closed", () => {
+    // Before purity, this outcome was judged by whatever defects/mutations.json
+    // happened to say on disk. checkRatchet must not read that file; the same
+    // arguments must now produce the same verdict regardless of the tree.
+    const { defects } = loadCorpus(process.cwd());
+    const defect = defects[0] as { id: string; aimsAt: string };
+    const first = checkRatchetWithIndex({ defects: 1 }, [
+      { id: defect.id, outcome: "caught", caughtBy: [defect.aimsAt] },
+    ]);
+    const second = checkRatchetWithIndex({ defects: 1 }, [
+      { id: defect.id, outcome: "caught", caughtBy: [defect.aimsAt] },
+    ]);
+    expect(first.ok).toBe(false);
+    expect(first.problems.join(" ")).toMatch(/aimsAt could not be checked/);
+    expect(second).toEqual(first);
+  });
+
+  it("flags an outcome string the checker does not recognize instead of passing it", () => {
+    const result = checkRatchetWithIndex({ defects: 1 }, [
+      { id: "a", outcome: "quarantined" },
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toMatch(/unrecognized outcome/);
+  });
+
+  it("threads aimsAt from the evaluator onto the outcome", async () => {
+    // Fast path: a corpus entry missing the fields narrowDefect requires is a
+    // corpus-error with no suite runs, so this proves the threading without
+    // spawning a scratch tree.
+    const outcome = await evaluateDefect(process.cwd(), {
+      id: "no-file",
+      aimsAt: "tests/sample.test.ts",
+    } as unknown as EvaluableDefect);
+    expect(outcome.outcome).toBe("corpus-error");
+    expect(outcome.aimsAt).toBe("tests/sample.test.ts");
   });
 });
