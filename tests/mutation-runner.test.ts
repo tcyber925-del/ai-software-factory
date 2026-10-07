@@ -1,18 +1,62 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 // @ts-expect-error -- corpus.mjs is plain ESM with no type declaration; the shapes
 // it exposes are asserted by the casts immediately below this import.
-import { applyDefect, loadCorpus } from "../scripts/mutation/corpus.mjs";
+import { applyDefect, CorpusError, loadCorpus, mutateFile } from "../scripts/mutation/corpus.mjs";
 
 // TypeScript cannot import a .mjs without a declaration; the runner is plain
 // ESM on purpose. These casts keep the test honest about the shape it expects.
+type CorpusErrorShape = { defectId: string; file: string; message: string };
 const loadCorpusTyped = loadCorpus as unknown as (
   repoRoot: string,
-) => { defects: unknown[]; errors: { defectId: string; file: string; message: string }[] };
+) => { defects: unknown[]; errors: CorpusErrorShape[] };
 const applyDefectTyped = applyDefect as unknown as (
   source: string,
   defect: unknown,
 ) => { mutated: string };
+const mutateFileTyped = mutateFile as unknown as (
+  repoRoot: string,
+  defect: unknown,
+) => { mutated: string };
+
+/**
+ * Fixtures live in the OS temp directory, never in the repository. A test that
+ * built its fixtures under the working tree would be writing to the tree it is
+ * meant to be validating.
+ */
+function populatedRoot(defects: unknown[] = [validDefect()]): string {
+  const root = mkdtempSync(join(tmpdir(), "corpus-fixture-"));
+  mkdirSync(join(root, "defects"), { recursive: true });
+  mkdirSync(join(root, "src"), { recursive: true });
+  mkdirSync(join(root, "tests"), { recursive: true });
+  writeFileSync(join(root, "defects", "mutations.json"), JSON.stringify({ defects }));
+  writeFileSync(join(root, "src", "sample.ts"), "const a = 1;\n");
+  writeFileSync(join(root, "tests", "sample.test.ts"), "it('sample', () => {});\n");
+  return root;
+}
+
+/** Writes a corpus file verbatim, for the shapes JSON.stringify cannot express. */
+function rawRoot(contents: string): string {
+  const root = mkdtempSync(join(tmpdir(), "corpus-fixture-"));
+  mkdirSync(join(root, "defects"), { recursive: true });
+  writeFileSync(join(root, "defects", "mutations.json"), contents);
+  return root;
+}
+
+function validDefect(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "ok",
+    aimsAt: "tests/sample.test.ts",
+    why: "a reason long enough to satisfy the corpus field rule",
+    file: "src/sample.ts",
+    find: "const a = 1;",
+    replace: "const a = 2;",
+    expected: "caught",
+    ...overrides,
+  };
+}
 
 describe("mutation corpus", () => {
   const repoRoot = process.cwd();
@@ -83,5 +127,235 @@ describe("mutation corpus", () => {
       const source = readFileSync(`${repoRoot}/${d.file}`, "utf8");
       expect(() => applyDefectTyped(source, d)).not.toThrow();
     }
+  });
+});
+
+describe("mutation corpus validation", () => {
+  /**
+   * The assertion this tool exists to make about itself. A loader that reports a
+   * malformed corpus as clean would give a mutation run over nothing a clean exit,
+   * so "no errors" on the shipped corpus is checked against the module, not only
+   * inferred from tests that pass.
+   */
+  it("loads the shipped corpus with no corpus errors", () => {
+    const { defects, errors } = loadCorpusTyped(process.cwd());
+    expect(errors).toEqual([]);
+    expect(defects.length).toBeGreaterThan(0);
+  });
+
+  it("reports no errors for a well-formed corpus", () => {
+    // Guards the validator against crying wolf: if every shape errored, the
+    // checks above would prove nothing.
+    const { defects, errors } = loadCorpusTyped(populatedRoot());
+    expect(errors).toEqual([]);
+    expect(defects.length).toBe(1);
+  });
+});
+
+describe("corpus errors: shape of the corpus itself", () => {
+  it("reports an unreadable corpus rather than throwing", () => {
+    const { defects, errors } = loadCorpusTyped(rawRoot("{ not json"));
+    expect(defects).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/could not be read/);
+  });
+
+  it("reports a missing corpus file rather than throwing", () => {
+    const { errors } = loadCorpusTyped(mkdtempSync(join(tmpdir(), "corpus-empty-")));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/could not be read/);
+  });
+
+  it("reports a corpus with no defects key", () => {
+    // I-1: this used to load as zero defects and no error, which is a clean run
+    // over nothing. A renamed or truncated key must be loud.
+    const { defects, errors } = loadCorpusTyped(rawRoot("{}"));
+    expect(defects).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/defects/);
+  });
+
+  it("reports a defects key that is not an array", () => {
+    for (const body of ['{"defects":{}}', '{"defects":"nope"}', '{"defects":5}']) {
+      const { defects, errors } = loadCorpusTyped(rawRoot(body));
+      expect(defects).toEqual([]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]!.message).toMatch(/defects/);
+    }
+  });
+
+  it("reports a corpus that is not a JSON object at all", () => {
+    // A top-level array or scalar is the same vacuous green as a missing key:
+    // it would otherwise yield zero defects and a clean exit.
+    for (const body of ["[]", '"nope"', "5", "null"]) {
+      const { defects, errors } = loadCorpusTyped(rawRoot(body));
+      expect(defects).toEqual([]);
+      expect(errors).toHaveLength(1);
+    }
+  });
+
+  it("accepts an empty defects array without calling it an error", () => {
+    // An empty corpus is a real state to report, not a malformed one. Silently
+    // treating it as an error would train an operator to ignore the error list.
+    const { defects, errors } = loadCorpusTyped(rawRoot('{"defects":[]}'));
+    expect(defects).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe("corpus errors: individual defects", () => {
+  it("reports a null entry without throwing, and does not hide the rest", () => {
+    // I-4: this used to throw a TypeError out of the loader, killing the run.
+    const { defects, errors } = loadCorpusTyped(
+      populatedRoot([null, validDefect({ id: "after-the-null" })]),
+    );
+    expect(defects).toHaveLength(2);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/not an object/);
+  });
+
+  it("reports non-object entries of every shape", () => {
+    for (const entry of [null, 7, "a string", true, ["an", "array"]]) {
+      const { errors } = loadCorpusTyped(populatedRoot([entry]));
+      expect(errors).toHaveLength(1);
+      expect(errors[0]!.message).toMatch(/not an object/);
+    }
+  });
+
+  it("reports a missing required field", () => {
+    const defect = validDefect();
+    delete (defect as Record<string, unknown>).why;
+    const { errors } = loadCorpusTyped(populatedRoot([defect]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/'why'/);
+  });
+
+  it("reports an empty required field", () => {
+    const { errors } = loadCorpusTyped(populatedRoot([validDefect({ why: "" })]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/'why'/);
+  });
+
+  it("reports a duplicate defect id", () => {
+    const { errors } = loadCorpusTyped(
+      populatedRoot([validDefect({ id: "same" }), validDefect({ id: "same" })]),
+    );
+    expect(errors.some((e) => /duplicate defect id/.test(e.message))).toBe(true);
+  });
+
+  it("reports a target file that does not exist", () => {
+    const { errors } = loadCorpusTyped(
+      populatedRoot([validDefect({ file: "src/absent.ts" })]),
+    );
+    expect(errors.some((e) => /target file/.test(e.message))).toBe(true);
+  });
+
+  it("reports an anchor that matches nothing in a real file", () => {
+    const { errors } = loadCorpusTyped(
+      populatedRoot([validDefect({ find: "const gone = 0;" })]),
+    );
+    expect(errors.some((e) => /matched 0 times/.test(e.message))).toBe(true);
+  });
+
+  it("reports an anchor that matches more than once in a real file", () => {
+    const root = populatedRoot([validDefect({ find: "a" })]);
+    writeFileSync(join(root, "src", "sample.ts"), "const a = 1; // a\n");
+    const { errors } = loadCorpusTyped(root);
+    expect(errors.some((e) => /matched 2 times/.test(e.message))).toBe(true);
+  });
+
+  it("reports an aimsAt that names no test file", () => {
+    const { errors } = loadCorpusTyped(
+      populatedRoot([validDefect({ aimsAt: "tests/absent.test.ts" })]),
+    );
+    expect(errors.some((e) => /aims at no test file/.test(e.message))).toBe(true);
+  });
+
+  it("rejects an expected value outside the known set", () => {
+    const { errors } = loadCorpusTyped(populatedRoot([validDefect({ expected: "banana" })]));
+    expect(errors.some((e) => /expected/.test(e.message))).toBe(true);
+  });
+
+  it("accepts every allowed expected value", () => {
+    for (const expected of ["caught", "escaped"]) {
+      const { errors } = loadCorpusTyped(populatedRoot([validDefect({ expected })]));
+      expect(errors).toEqual([]);
+    }
+  });
+
+  it("does not resolve a file or an anchor it was already told is malformed", () => {
+    // A missing `file` or `find` is reported once, as a shape error, rather than
+    // as a pile of follow-on complaints about a value that does not exist.
+    const { errors } = loadCorpusTyped(populatedRoot([validDefect({ file: undefined, find: undefined })]));
+    const messages = errors.map((e) => e.message);
+    expect(messages.filter((m) => /'file'/.test(m))).toHaveLength(1);
+    expect(messages.filter((m) => /'find'/.test(m))).toHaveLength(1);
+    expect(messages.some((m) => /target file|matched \d+ times/.test(m))).toBe(false);
+  });
+});
+
+describe("applyDefect error type and literal replacement", () => {
+  it("throws a CorpusError carrying defectId and file", () => {
+    // I-3: Task 2 must be able to tell a stale corpus from a crash without
+    // regexing a prose message.
+    let thrown: unknown;
+    try {
+      applyDefectTyped("const a = 1;\n", {
+        id: "stale",
+        file: "src/kernel/repair.ts",
+        find: "const gone = 0;",
+        replace: "const gone = 1;",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CorpusError);
+    const err = thrown as InstanceType<typeof CorpusError> & CorpusErrorShape;
+    expect(err.defectId).toBe("stale");
+    expect(err.file).toBe("src/kernel/repair.ts");
+    expect(err.message).toMatch(/exactly once/);
+  });
+
+  it("treats dollar sequences in a replacement as literal text", () => {
+    // M-7: String.replace expands $&, $' and friends, silently yielding source
+    // that is not what the corpus asked for.
+    const cases: Array<[string, string, string, string]> = [
+      ["hello world", "world", "[$&]", "hello [$&]"],
+      ["abc", "b", "$1$", "a$1$c"],
+      ["abc", "b", "x$'y", "ax$'yc"],
+      ["abc", "b", "$$", "a$$c"],
+      ["abc", "b", "$`", "a$`c"],
+    ];
+    for (const [source, find, replace, expected] of cases) {
+      const { mutated } = applyDefectTyped(source, { id: "d", file: "x.ts", find, replace });
+      expect(mutated).toBe(expected);
+    }
+  });
+
+  it("does not expand a dollar sequence that appears in the anchor", () => {
+    const { mutated } = applyDefectTyped("cost is $5\n", {
+      id: "d",
+      file: "x.ts",
+      find: "$5",
+      replace: "$6",
+    });
+    expect(mutated).toBe("cost is $6\n");
+  });
+});
+
+describe("mutateFile", () => {
+  it("reads the target file and applies the defect without writing it back", () => {
+    const root = populatedRoot();
+    const { mutated } = mutateFileTyped(root, validDefect());
+    expect(mutated).toBe("const a = 2;\n");
+    // The machinery must leave the tree it is inspecting untouched.
+    expect(readFileSync(join(root, "src", "sample.ts"), "utf8")).toBe("const a = 1;\n");
+  });
+
+  it("propagates a CorpusError when the anchor is not unique", () => {
+    const root = populatedRoot([validDefect({ find: "const gone = 0;" })]);
+    expect(() => mutateFileTyped(root, validDefect({ find: "const gone = 0;" }))).toThrow(
+      CorpusError,
+    );
   });
 });

@@ -28,8 +28,16 @@ not a check.**
 
 - Anchors must match exactly once. Zero matches means the source moved — that is a corpus error,
   and it is reported as one rather than as a defect that escaped.
+- `loadCorpus` checks every one of these before anything is applied: that `defects` is an array,
+  that each entry is an object, that all seven fields are non-empty strings, that ids are unique,
+  that the target file exists, that the anchor matches exactly once, and that `aimsAt` names a real
+  test file. It returns the problems as a list rather than throwing, so a caller can refuse to start.
+  An empty `defects` array is a real state, not a malformed corpus.
+- `expected` must be `caught` or `escaped`. It decides what counts as a pass, so a value the runner
+  cannot interpret is rejected instead of quietly matching nothing.
 - A mutation that cannot be evaluated is never reported as an escape. An escape means the check
   missed it, and a defect that never ran is not evidence of anything.
+- Replacement text is literal. `$1`, `$&` and `$'` are not capture references here.
 - Never quote the test-suite size in this directory. `main` removed those numbers deliberately;
   `npm run verify` is the source of truth.
 
