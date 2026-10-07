@@ -97,23 +97,32 @@ missing optional runtime does not.
 
 ## What it reports today
 
-Against this repository at `0147484`:
+Summary lines from a clean checkout. Each `[ok]` runtime is followed by its detected version in
+the real output:
 
 ```
-factory doctor: degraded
+factory doctor: healthy
   [ok  ] node.version: Node v24.14.0 meets the minimum v22
   [ok  ] git.worktree: Git worktrees are available for isolation
   [ok  ] git.repository: Inside a Git repository
-  [warn] git.clean: Working tree has uncommitted changes
+  [ok  ] git.clean: Working tree is clean
   [ok  ] runtime.opencode: opencode (direct runtime) is available
   [ok  ] runtime.herdr: herdr (managed runtime) is available
+  [ok  ] runtime.hermes: hermes (managed runtime) is available
   [ok  ] project.files: All 5 required project files are present
-  6 ok, 1 warning(s), 0 error(s)
+  8 ok, 0 warning(s), 0 error(s)
 ```
 
-`degraded` is the expected reading for a working tree with local changes — worktrees are created
-from a revision, so uncommitted work would not be isolated. The doctor is not run against a
-committed state here; it is run against whatever is on disk, which is the point of it.
+There are eight checks. `runtime.hermes` is present because Hermes is an optional requirement
+and the CLI offers it whenever its binary is on `PATH`; an absent Hermes is a warning, while a
+*present but unhealthy* one is reported here rather than surfacing mid-dispatch, after a worktree
+exists and an agent has started. Hermes will not appear on a machine without it, and the summary
+count drops accordingly.
+
+With local changes present, `git.clean` reports `[warn]` and the verdict becomes `degraded` —
+worktrees are created from a revision, so uncommitted work would not be isolated. The doctor
+reports whatever is on disk rather than a committed state, which is the point of it, so this
+summary is a clean-checkout reading rather than a fixed expectation.
 
 The 5 required project files are the protocol and policy files the doctor checks for. It does not
 require `schemas/`, which is correct — an adopting project does not ship them, and the CLI now

@@ -102,7 +102,11 @@ A verification record should identify:
 
 ## Current repository baseline
 
-Verified against the live repository at `0147484` (2026-10-06).
+Re-verified against live `main` on 2026-10-06, after #57 merged. Earlier revisions of this
+document named a commit here; that number was a claim a reader could not check, and it was wrong
+within a day of being written. The settings below are the things worth recording, and they are
+re-confirmed against the GitHub API when this section is next reviewed rather than trusted from
+prose.
 
 The GitHub Actions workflow at `.github/workflows/ci.yml` is the deterministic contract gate. It runs on pull requests and pushes to `main`. The job is named `contract`, and that is the name branch protection requires.
 
