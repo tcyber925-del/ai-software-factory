@@ -162,6 +162,12 @@ mode that makes an in-place mutation unsafe in CI. And a mutation that cannot be
 reported as a corpus error, never as an escape: an escape claims a check missed something, and a
 defect that never ran is not evidence.
 
+The scope-control composition — a violation detected by `checkScope`, passed through the pipeline
+as `scopeReason`, and read by `buildIntegrationResult` — has no test that asserts the whole path.
+The two halves are tested separately and the wire between them is not. This is the same
+absence-of-a-caller shape as the Linear intake gap above, one level down, and it is recorded rather
+than left for a reader to discover.
+
 ## Dependency installation
 
 CI installs dependencies with `npm ci` against the committed `package-lock.json`.

@@ -49,3 +49,21 @@ npm run mutations -- --defect repair-limit-never-reached   # one defect
 ```
 
 A defect that is not caught is a finding, not a failure of the tool. Report it.
+
+## What this does not prove
+
+**It only finds defects someone thought of.** This is the corpus's real limit and it is not
+measurable from inside the tool. Five defects cover five controls; the kernel has more. A mutation
+score would put a number here, and the number would be as misleading as the three suite sizes this
+project has already published.
+
+**It proves the suite can fail, not that it is correct.** A defect caught by a test that asserts
+something adjacent counts the same as one caught by the test that encodes the control. That is why
+each defect names the check it aims at, so the attribution is reviewable rather than trusted.
+
+**It does not cover the composition.** `checkScope` is tested directly, and the
+pipeline → scopeReason → integration path that uses its result is only exercised indirectly. The
+`integration-gate-ignores-scope` defect is caught, but by `tests/scope.test.ts`, which tests the
+scoper rather than the wiring. The wiring is the thing that failed in dogfooding. Adding a test
+that asserts a scope violation reaches `integration.blocked` is the honest next step, and it is
+deliberately not folded in here.
