@@ -1,0 +1,32 @@
+# The mutation rung.
+#
+# Separate from `contract` on purpose: a corpus problem and a real regression
+# need different responses, and a reader should be able to tell them apart
+# without reading logs.
+name: Mutation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    # Non-blocking while the corpus is calibrated. A red here means either a
+    # control lost its test (a real finding) or a defect's anchor drifted (a
+    # corpus problem). Those need different responses, and this job cannot yet
+    # tell you which. Making this blocking is a separate decision that needs a
+    # human — see docs/verification-and-merge-gates.md.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci
+      - name: Evaluate the defect corpus
+        run: npm run mutations
