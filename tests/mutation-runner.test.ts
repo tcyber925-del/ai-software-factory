@@ -1148,3 +1148,37 @@ describe("ratchet fail-closed floor and pure arguments", () => {
     expect(outcome.aimsAt).toBe("tests/sample.test.ts");
   });
 });
+
+describe("mutation runner CLI", () => {
+  // Async spawn rather than spawnSync: a blocked event loop starves the RPC
+  // timeslice to Vitest's worker parent, which then reports an unhandled
+  // onTaskUpdate timeout on top of the real result.
+  function runCli(args: string[]): Promise<{ status: number | null; output: string }> {
+    return new Promise((resolve) => {
+      const child = spawn("node", ["scripts/mutation/run.mjs", ...args], {
+        cwd: process.cwd(),
+      });
+      let output = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        output += String(chunk);
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        output += String(chunk);
+      });
+      child.on("error", (error) => {
+        resolve({ status: -1, output: `${output}\nspawn failed: ${error.message}` });
+      });
+      child.on("close", (code) => resolve({ status: code, output }));
+    });
+  }
+
+  it("reports every defect caught and exits 0", async () => {
+    const result = await runCli([]);
+    const output = result.output;
+    expect(output).toMatch(/5 defects/);
+    expect(output).toMatch(/caught/);
+    // A green summary reads "0 escaped"; only a real escape is a failure.
+    expect(output).not.toMatch(/[1-9]\d* escaped/);
+    expect(result.status).toBe(0);
+  }, 900000);
+}, );
