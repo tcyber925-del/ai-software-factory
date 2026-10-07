@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { spawn, execFile as execFileCb } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -10,8 +13,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { applyDefect, CorpusError, loadCorpus, mutateFile } from "../scripts/mutation/corpus.mjs";
 import { assertRealNodeModules, createScratch } from "../scripts/mutation/scratch.mjs";
+
+const execFileAsync = promisify(execFileCb);
 
 /**
  * Both runner modules are plain ESM, so their shapes are declared alongside them
@@ -362,6 +368,65 @@ describe("mutateFile", () => {
 });
 
 describe("scratch tree", () => {
+  /** The scratch directories currently in the OS temp directory, for leak checks. */
+  function scratchTrees(): string[] {
+    return readdirSync(tmpdir())
+      .filter((entry) => entry.startsWith("factory-mutation-"))
+      .sort();
+  }
+
+  /** Runs git from inside the given working directory; true if it exited zero. */
+  async function gitSucceeds(cwd: string, args: string[]): Promise<boolean> {
+    try {
+      await execFileAsync("git", args, { cwd });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Asks git whether a path is ignored, from inside the given working directory. */
+  function checkIgnored(cwd: string, path: string): Promise<boolean> {
+    return gitSucceeds(cwd, ["check-ignore", "-q", "--no-index", path]);
+  }
+
+  /**
+   * Runs Vitest with `cwd` as the working directory, resolving the runner out of
+   * the scratch tree's own `node_modules`.
+   *
+   * That working directory is the whole point: git resolves `.gitignore` against
+   * the repository containing the current path, so the hygiene tests only
+   * exercise the copied `.gitignore` if the process starts inside the scratch
+   * tree. `VITEST_*` is stripped so the inner run is not steered by the outer
+   * runner's state.
+   */
+  function runVitestIn(
+    cwd: string,
+    file: string,
+  ): Promise<{ code: number; output: string }> {
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("VITEST")),
+    );
+    return new Promise((resolve) => {
+      const child = spawn(
+        process.execPath,
+        [join(cwd, "node_modules", "vitest", "vitest.mjs"), "run", file],
+        { cwd, env, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      let output = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        output += String(chunk);
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        output += String(chunk);
+      });
+      child.on("error", (error) => {
+        resolve({ code: -1, output: `${output}\nspawn failed: ${error.message}` });
+      });
+      child.on("close", (code) => resolve({ code: code ?? -1, output }));
+    });
+  }
+
   it("copies src and tests into the scratch tree", () => {
     const scratch = createScratch(process.cwd());
     try {
@@ -373,12 +438,23 @@ describe("scratch tree", () => {
     }
   });
 
-  it("does not copy .git, node_modules, dist, or worktrees", () => {
+  it("does not copy the repository's own directories, and copies node_modules", () => {
+    // Renamed to match what it checks. The old name claimed node_modules and
+    // .worktrees while asserting neither: node_modules is copied, not skipped,
+    // and .worktrees does not exist at a worktree root, so asserting its absence
+    // proved nothing. .tmp-test and .factory are asserted instead because the
+    // repository root really does contain them.
     const scratch = createScratch(process.cwd());
     try {
-      expect(existsSync(join(scratch.path, ".git"))).toBe(false);
-      expect(existsSync(join(scratch.path, ".worktrees"))).toBe(false);
+      // Not "`.git` is absent": `createScratch` now runs `git init`, so `.git`
+      // exists by design. What must not have happened is a *copy* of the source
+      // repository's git directory — and inside a linked worktree that `.git` is
+      // a file naming the real git directory, so a directory here is the proof.
+      expect(lstatSync(join(scratch.path, ".git")).isDirectory()).toBe(true);
       expect(existsSync(join(scratch.path, "dist"))).toBe(false);
+      expect(existsSync(join(scratch.path, ".tmp-test"))).toBe(false);
+      expect(existsSync(join(scratch.path, ".factory"))).toBe(false);
+      expect(existsSync(join(scratch.path, "node_modules"))).toBe(true);
     } finally {
       scratch.cleanup();
     }
@@ -387,7 +463,9 @@ describe("scratch tree", () => {
   it("refuses a scratch tree whose node_modules is a symlink", () => {
     // Observed during planning: a symlinked node_modules makes
     // `git check-ignore` fail with "beyond a symbolic link", which surfaced
-    // as a spurious repo-hygiene failure that looked like a real defect.
+    // as a spurious repo-hygiene failure that looked like a real defect. The
+    // symlink is no longer how the tree is built; this pins the guard against
+    // someone reintroducing it as a speed optimisation.
     const base = mkdtempSync(join(tmpdir(), "scratch-symlink-"));
     try {
       const target = join(base, "target");
@@ -399,11 +477,64 @@ describe("scratch tree", () => {
     }
   });
 
-  it("cleanup removes the scratch tree", () => {
+  it("builds a tree the repo-hygiene tests can actually run in", async () => {
+    // The property this whole file exists to guarantee, and the one a
+    // hand-made fixture cannot check: a mutation run reports "caught" only when
+    // the suite failed *because of the mutation*.
+    //
+    // Without `git init`, `git check-ignore` reports "not a git repository" and
+    // most of the hygiene tests fail whatever mutation is applied, so every
+    // defect reads as caught for a reason of its own. With a symlinked
+    // node_modules, one more fails with "beyond a symbolic link". Measured on the
+    // pre-fix tree: 6 failed, 1 passed — with no defect applied at all.
+    const scratch = createScratch(process.cwd());
+    try {
+      expect(existsSync(join(scratch.path, ".git"))).toBe(true);
+      expect(() => assertRealNodeModules(scratch.path)).not.toThrow();
+
+      // Its own repository, not a copy of this one. A scratch tree wired to the
+      // real git directory would resolve the real `.gitignore` and could commit
+      // a mutation into the real history; a fresh one has no HEAD at all.
+      expect(await gitSucceeds(scratch.path, ["rev-parse", "--verify", "HEAD"])).toBe(
+        false,
+      );
+
+      // The mechanism, asserted directly: git resolves `.gitignore` relative to
+      // the repository containing the current path, so these answers can only be
+      // right if the scratch tree is itself a repository.
+      expect(await checkIgnored(scratch.path, "node_modules/")).toBe(true);
+      expect(await checkIgnored(scratch.path, ".tmp-test/opencode-ws-1234")).toBe(true);
+      expect(await checkIgnored(scratch.path, "package.json")).toBe(false);
+
+      // And the consequence, end to end. `run` exits non-zero when a filter
+      // matches nothing, so this cannot pass by collecting no tests.
+      const result = await runVitestIn(scratch.path, "tests/repo-hygiene.test.ts");
+      expect(result.code, result.output).toBe(0);
+    } finally {
+      scratch.cleanup();
+    }
+  });
+
+  it("leaves no scratch directory behind when construction fails", () => {
+    // The caller gets a handle to the directory only if construction finishes,
+    // so a failure part-way through has to clean up after itself. ENOENT is the
+    // cheapest way in; a mid-copy failure orphans a partial tree the same way.
+    const missing = join(tmpdir(), "mutation-corpus-no-such-repo-root");
+    const before = scratchTrees();
+    expect(() => createScratch(missing)).toThrow();
+    expect(scratchTrees()).toEqual(before);
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  it("cleanup removes the scratch tree and is safe to call twice", () => {
     const scratch = createScratch(process.cwd());
     const path = scratch.path;
     expect(existsSync(path)).toBe(true);
     scratch.cleanup();
+    expect(existsSync(path)).toBe(false);
+    // A second call must be a no-op, not ENOENT: a runner that cleans up in a
+    // finally and again on an error path should not have to track which ran.
+    expect(() => scratch.cleanup()).not.toThrow();
     expect(existsSync(path)).toBe(false);
   });
 });

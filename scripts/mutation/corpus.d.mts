@@ -13,7 +13,11 @@
  * time instead.
  */
 
-/** One deliberate defect, as authored in `defects/mutations.json`. */
+/**
+ * A well-formed defect, as authored in `defects/mutations.json`. This is the
+ * shape `loadCorpus` validates *toward*, not the shape it guarantees — it hands
+ * back whatever the file contained.
+ */
 export interface Defect {
   id: string;
   /** The test file that must fail when this defect is applied. */
@@ -42,9 +46,16 @@ export declare class CorpusError extends Error {
  * Reads and validates the corpus. Never throws for a malformed corpus: every
  * problem is returned as a `CorpusError`, because a defect that never ran is not
  * evidence of anything and must not be reportable as one that escaped.
+ *
+ * `defects` is the raw parsed array, deliberately not a filtered one. A corpus
+ * containing a `null` reports that entry in `errors` *and* hands it back in
+ * `defects`, because dropping it would leave a caller unable to say which entry
+ * went missing, and "these defects ran" has to stay checkable against the file.
+ * The consequence is that an element is exactly as trustworthy as `errors` says
+ * it is: narrow it before use, or pair each entry with its corpus error.
  */
 export declare function loadCorpus(repoRoot: string): {
-  defects: Defect[];
+  defects: unknown[];
   errors: CorpusError[];
 };
 
