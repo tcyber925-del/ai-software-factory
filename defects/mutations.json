@@ -1,0 +1,49 @@
+{
+  "defects": [
+    {
+      "id": "integration-gate-ignores-scope",
+      "aimsAt": "tests/scope.test.ts",
+      "why": "A scope violation must block integration. If the scopeReason override is dropped, a Work Unit that wrote outside its declared boundary reports ready, and the operator reads a green result while the boundary was crossed.",
+      "file": "src/kernel/integration.ts",
+      "find": "const blocker = options.scopeReason ?? blockingReason(execution, verification);",
+      "replace": "const blocker = blockingReason(execution, verification);",
+      "expected": "caught"
+    },
+    {
+      "id": "repair-limit-never-reached",
+      "aimsAt": "tests/repair.test.ts",
+      "why": "Bounded repair is what stops a failing Work Unit retrying forever. Raising the default so the loop cannot escalate turns every deterministic failure into an unbounded one.",
+      "file": "src/kernel/repair.ts",
+      "find": "export const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;",
+      "replace": "export const DEFAULT_MAX_REPAIR_ATTEMPTS = 1000;",
+      "expected": "caught"
+    },
+    {
+      "id": "security-destructive-needs-no-sandbox",
+      "aimsAt": "tests/security.test.ts",
+      "why": "Higher-risk work requires a sandbox; this is the control that stops a destructive Work Unit quietly running in an ordinary worktree, where isolation means files and not privileges.",
+      "file": "src/security/risk.ts",
+      "find": "export function minimumIsolationFor(risk: RiskClass): IsolationLevel {\n  switch (risk) {\n    case \"destructive\":\n    case \"untrusted\":\n      return \"sandbox\";",
+      "replace": "export function minimumIsolationFor(risk: RiskClass): IsolationLevel {\n  switch (risk) {\n    case \"destructive\":\n      return \"git_worktree\";\n    case \"untrusted\":\n      return \"sandbox\";",
+      "expected": "caught"
+    },
+    {
+      "id": "scope-undeclared-not-flagged",
+      "aimsAt": "tests/scope.test.ts",
+      "why": "A Work Unit that declares no paths gets no scope gate. Reporting that as in-scope makes an undeclared Work Unit look exactly like a narrowly-scoped one.",
+      "file": "src/kernel/scope.ts",
+      "find": "return { changed, outOfScope: [], undeclared: true };",
+      "replace": "return { changed, outOfScope: [], undeclared: false };",
+      "expected": "caught"
+    },
+    {
+      "id": "verification-failure-reads-as-pass",
+      "aimsAt": "tests/execution-slice.test.ts",
+      "why": "Verification status is derived from the exit code. If a failing check is recorded as passing, the integration gate's central rule becomes unreachable and every Work Unit is ready.",
+      "file": "src/adapters/verification/shell.ts",
+      "find": "const status = result.exitCode === 0 ? \"passed\" : \"failed\";",
+      "replace": "const status = \"passed\";",
+      "expected": "caught"
+    }
+  ]
+}

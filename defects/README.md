@@ -1,0 +1,43 @@
+# Defect corpus
+
+Five deliberate degradations of this repository's own controls, each paired with the check
+that is supposed to notice it. The runner applies them one at a time and records which test
+file caught each one.
+
+## Why this exists
+
+`docs/verification-and-merge-gates.md` states that the suite's non-vacuity was proven by
+deliberately weakening the implementation and confirming the tests then failed. That was done
+by hand, once. This corpus makes it re-checkable on every run.
+
+The claim being defended: **a green `contract` run is evidence, and a check that cannot fail is
+not a check.**
+
+## Adding a defect
+
+1. Choose a promise the module documents in prose.
+2. Make the smallest change that breaks that promise. Do not damage the module beyond
+   recognition — a defect that wrecks a file proves an assertion exists, not that the assertion
+   guards the control.
+3. Find the exact source text to replace, and confirm it appears **exactly once** in the file.
+   Use the surrounding function signature where a bare line is ambiguous.
+4. Record the test file that catches it in `aimsAt`. Confirm by running the suite.
+5. Add the defect and raise `ratchet.json` in the same commit.
+
+## Rules
+
+- Anchors must match exactly once. Zero matches means the source moved — that is a corpus error,
+  and it is reported as one rather than as a defect that escaped.
+- A mutation that cannot be evaluated is never reported as an escape. An escape means the check
+  missed it, and a defect that never ran is not evidence of anything.
+- Never quote the test-suite size in this directory. `main` removed those numbers deliberately;
+  `npm run verify` is the source of truth.
+
+## Running
+
+```
+npm run mutations          # evaluate every defect
+npm run mutations -- --defect repair-limit-never-reached   # one defect
+```
+
+A defect that is not caught is a finding, not a failure of the tool. Report it.
