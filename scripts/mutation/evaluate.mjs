@@ -124,7 +124,7 @@ function suiteRunnerPath(scratchPath) {
 export function extractFailingTests(output) {
   const found = new Set();
   for (const line of output.replace(ANSI_PATTERN, "").split("\n")) {
-    const match = /^\s*FAIL\s+(tests\/[\w.-]+\.test\.ts)\b/.exec(line);
+    const match = /^\s*FAIL\s+(tests\/(?:[\w.-]+\/)*[\w.-]+\.test\.ts)\b/.exec(line);
     if (match) found.add(match[1]);
   }
   return [...found].sort();
@@ -149,6 +149,13 @@ function runSuite(cwd, timeoutMs, runner) {
         ),
       ),
       stdio: ["ignore", "pipe", "pipe"],
+      // The child becomes a process-group leader, so the timeout can kill the
+      // whole group. The suite forks its workers; killing only the direct child
+      // leaves a live pool behind, and one wedged run becomes several on a
+      // long-lived runner. The accepted cost: a CI-wide SIGTERM no longer
+      // cascades into the child, which matters only when an external kill
+      // happens at all.
+      detached: true,
     });
 
     let output = "";
@@ -160,8 +167,16 @@ function runSuite(cwd, timeoutMs, runner) {
       timedOut = true;
       // SIGKILL, not SIGTERM: the point of the ceiling is that a wedged run
       // cannot hold the evaluation open, and a process that ignores SIGTERM
-      // would simply restart the wait.
-      child.kill("SIGKILL");
+      // would simply restart the wait. Take the whole process group — the
+      // suite's forked workers included — since one survivor is one wedged
+      // run that never finished dying.
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // The group is gone already, or negative-pid kill is unsupported here
+        // (EPERM/ESRCH): the direct child alone is the fallback.
+        child.kill("SIGKILL");
+      }
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {

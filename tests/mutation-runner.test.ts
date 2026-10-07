@@ -580,12 +580,26 @@ describe("defect evaluation", () => {
    * that the evaluator declines to attribute what it cannot attribute.
    */
   const SHIM_SOURCE = [
-    'import { readFileSync } from "node:fs";',
+    'import { readFileSync, writeFileSync } from "node:fs";',
+    'import { spawn } from "node:child_process";',
     'import { join } from "node:path";',
     'const read = (path) => readFileSync(join(process.cwd(), path), "utf8");',
     'const world = read("watched.txt").trim();',
+    'if (process.env.SUITE_ARGV_FILE) {',
+    '  writeFileSync(process.env.SUITE_ARGV_FILE, JSON.stringify(process.argv.slice(2)));',
+    '}',
     'if (world === "hang") {',
     '  // Outlive the caller: only the evaluator\'s timeout can end this run.',
+    '  setTimeout(() => {}, 2 ** 30);',
+    "}",
+    'if (world === "hang-fork") {',
+    "  // A forked grandchild: the evaluator's timeout must take the whole",
+    "  // process group, because Vitest's pool is forked the same way and a",
+    "  // direct-child kill would leave the grandchild alive.",
+    '  const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+    '  if (process.env.GRANDCHILD_PID_FILE) {',
+    '    writeFileSync(process.env.GRANDCHILD_PID_FILE, String(grandchild.pid));',
+    '  }',
     '  setTimeout(() => {}, 2 ** 30);',
     "}",
     'const mutated = read("src/sample.ts");',
@@ -610,7 +624,7 @@ describe("defect evaluation", () => {
    * never gets as far as running anything, which is a separate outcome with its
    * own test below.
    */
-  function shimRoot(world: "green" | "red" | "red-after-mutation" | "hang"): string {
+  function shimRoot(world: "green" | "red" | "red-after-mutation" | "hang" | "hang-fork"): string {
     const root = mkdtempSync(join(tmpdir(), "corpus-shim-"));
     mkdirSync(join(root, "node_modules", "vitest"), { recursive: true });
     mkdirSync(join(root, "src"), { recursive: true });
@@ -662,6 +676,24 @@ describe("defect evaluation", () => {
       " FAIL  tests/scope.test.ts > says so in the gate",
     ].join("\n");
     expect(extractFailingTests(output)).toEqual(["tests/scope.test.ts"]);
+  });
+
+  it("extracts failing test files at nested paths", () => {
+    // Latent today — every test file in this repo is flat — but loadCorpus
+    // accepts a nested aimsAt without complaint, so a defect caught only by a
+    // nested test would report caught with caughtBy empty: "no check can be
+    // credited" for the wrong reason.
+    const output = [
+      " FAIL  tests/unit/repair.test.ts > escalates at the limit",
+      " FAIL  tests/acceptance/scope.test.ts > reports no gate when paths are undeclared",
+      " FAIL  tests/scope.test.ts > a flat one still matches",
+      " Test Files  3 failed | 2 passed (5)",
+    ].join("\n");
+    expect(extractFailingTests(output)).toEqual([
+      "tests/acceptance/scope.test.ts",
+      "tests/scope.test.ts",
+      "tests/unit/repair.test.ts",
+    ]);
   });
 
   it("reports an escaped defect when the suite passes on a mutated tree", async () => {
@@ -792,4 +824,145 @@ describe("defect evaluation", () => {
     // defect that aims at an excluded file instead of reporting it as an escape.
     expect(SUITE_EXCLUDE).toContain("tests/mutation-runner.test.ts");
   });
+
+  it("passes the exclusion of its own test file to the suite it spawns", async () => {
+    // The constant assertion above cannot observe the wiring: deleting the
+    // `--exclude` arguments from the spawned suite leaves the constant
+    // untouched, so that test stays green while the runner recurses into its
+    // own test file. What matters is the argv the suite is invoked with, so
+    // the shim records its arguments and this test reads them back.
+    const dir = mkdtempSync(join(tmpdir(), "suite-argv-"));
+    const argvFile = join(dir, "argv.json");
+    process.env.SUITE_ARGV_FILE = argvFile;
+    try {
+      const outcome = await evaluateDefect(shimRoot("green"), validDefect());
+      expect(outcome.outcome).toBe("escaped");
+      const argv = JSON.parse(readFileSync(argvFile, "utf8")) as string[];
+      const pairs = argv.map((arg, index) => [arg, argv[index + 1]] as const);
+      expect(pairs).toContainEqual(["--exclude", "tests/mutation-runner.test.ts"]);
+    } finally {
+      delete process.env.SUITE_ARGV_FILE;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it("reaps the forked grandchild with the rest of the tree on timeout", async () => {
+    // A timeout kills nothing less than the whole process group: the suite's
+    // pool is forked, so a direct-child SIGKILL leaves a live pool behind.
+    // The shim forks a long-lived grandchild and reports its pid; after the
+    // evaluator's timeout that pid must not be alive.
+    const dir = mkdtempSync(join(tmpdir(), "grandchild-pid-"));
+    const pidFile = join(dir, "grandchild.pid");
+    process.env.GRANDCHILD_PID_FILE = pidFile;
+    try {
+      const outcome = await evaluateDefect(shimRoot("hang-fork"), validDefect(), {
+        timeoutMs: 1000,
+      });
+      expect(outcome.outcome).toBe("corpus-error");
+      expect(outcome.reason).toMatch(/did not finish within/);
+
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      expect(Number.isInteger(pid)).toBe(true);
+
+      // Poll briefly: the grandchild must be gone and reaped, not merely on
+      // its way down, before this can claim to have observed the kill.
+      let alive = true;
+      for (let attempt = 0; attempt < 20 && alive; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        try {
+          process.kill(pid, 0);
+        } catch {
+          alive = false;
+        }
+      }
+      expect(alive).toBe(false);
+    } finally {
+      delete process.env.GRANDCHILD_PID_FILE;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+});
+
+describe("suite exclusion merging", () => {
+  /**
+   * Proves CLI `--exclude` is merged with the config file's exclude array,
+   * not substituted for it. The canary test below fails whenever it runs, so
+   * "not collected" and "collected" differ by the exit code alone. Vitest
+   * 3.2.7 merges; if a upgrade ever replaced instead, the mutation runner's
+   * own hygiene excludes (node_modules, .tmp-test, ...) would silently stop
+   * applying the moment an exclusion was passed.
+   */
+  it("keeps the config file's excludes when a CLI exclude is passed", async () => {
+    const scratch = createScratch(process.cwd());
+    try {
+      mkdirSync(join(scratch.path, "tests", "nested"), { recursive: true });
+      writeFileSync(
+        join(scratch.path, "tests", "nested", "skipme-canary.test.ts"),
+        ['import { expect, it } from "vitest";', 'it("canary", () => { expect(1).toBe(2); });', ""].join("\n"),
+      );
+      writeFileSync(
+        join(scratch.path, "tests", "nested", "keepme.test.ts"),
+        ['import { expect, it } from "vitest";', 'it("keeps running", () => { expect(1).toBe(1); });', ""].join("\n"),
+      );
+
+      const configBody = (excludes: string[]) =>
+        [
+          'import { defineConfig } from "vitest/config";',
+          "export default defineConfig({",
+          "  test: {",
+          '    include: ["tests/nested/**/*.test.ts"],',
+          `    exclude: ${JSON.stringify(excludes)},`,
+          "  },",
+          "});",
+          "",
+        ].join("\n");
+
+      const run = (args: string[]) =>
+        new Promise<{ code: number; output: string }>((resolve) => {
+          const child = spawn(
+            process.execPath,
+            [join(scratch.path, "node_modules", "vitest", "vitest.mjs"), "run", ...args],
+            {
+              cwd: scratch.path,
+              env: Object.fromEntries(
+                Object.entries(process.env).filter(([key]) => !key.startsWith("VITEST")),
+              ),
+              stdio: ["ignore", "pipe", "pipe"],
+            },
+          );
+          let output = "";
+          child.stdout.on("data", (chunk: Buffer) => {
+            output += String(chunk);
+          });
+          child.stderr.on("data", (chunk: Buffer) => {
+            output += String(chunk);
+          });
+          child.on("error", (error) => {
+            resolve({ code: -1, output: `${output}\nspawn failed: ${error.message}` });
+          });
+          child.on("close", (code) => resolve({ code: code ?? -1, output }));
+        });
+
+      // Control: with no exclude anywhere, the canary is collected and fails.
+      // Without this, a green second run could mean "never collected" rather
+      // than "excluded", and the test would discriminate nothing.
+      writeFileSync(join(scratch.path, "vitest.config.ts"), configBody([]));
+      const control = await run([]);
+      expect(control.code).not.toBe(0);
+      expect(control.output).toContain("skipme-canary");
+
+      // The claim under test: a config-only exclude still applies when the
+      // command line adds its own. If the CLI argument replaced the config's
+      // array, the canary would be collected and this run would fail.
+      writeFileSync(
+        join(scratch.path, "vitest.config.ts"),
+        configBody(["tests/nested/skipme-canary.test.ts"]),
+      );
+      const merged = await run(["--exclude", "tests/mutation-runner.test.ts"]);
+      expect(merged.code, merged.output).toBe(0);
+      expect(merged.output).not.toContain("skipme-canary");
+    } finally {
+      scratch.cleanup();
+    }
+  }, 120000);
 });
