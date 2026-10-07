@@ -16,6 +16,11 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { applyDefect, CorpusError, loadCorpus, mutateFile } from "../scripts/mutation/corpus.mjs";
 import { assertRealNodeModules, createScratch } from "../scripts/mutation/scratch.mjs";
+import {
+  evaluateDefect,
+  extractFailingTests,
+  SUITE_EXCLUDE,
+} from "../scripts/mutation/evaluate.mjs";
 
 const execFileAsync = promisify(execFileCb);
 
@@ -536,5 +541,255 @@ describe("scratch tree", () => {
     // finally and again on an error path should not have to track which ran.
     expect(() => scratch.cleanup()).not.toThrow();
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+/**
+ * What `evaluateDefect` takes, read off its own declaration rather than restated
+ * here, so narrowing the loader's `unknown[]` cannot drift from the contract the
+ * module actually publishes.
+ */
+type EvaluableDefect = Parameters<typeof evaluateDefect>[1];
+
+/**
+ * The evaluator, and the three outcomes it keeps apart.
+ *
+ *   caught       the suite failed on a mutated tree that was green beforehand.
+ *   escaped      the suite passed on a mutated tree — a finding about the suite.
+ *   corpus-error the defect could not be evaluated at all, which is never an
+ *                escape, because an escape claims a check missed something and a
+ *                defect that never ran is not evidence.
+ *
+ * The rule this file exists to pin is the baseline. Every defect is run twice:
+ * once with nothing mutated, to prove the scratch tree is green, and once
+ * mutated. Without the first run a scratch tree that fails for environmental
+ * reasons makes every defect report "caught" — a systematic false positive that
+ * looks exactly like the evidence this tool exists to produce.
+ */
+describe("defect evaluation", () => {
+  /**
+   * A stand-in for Vitest, for the paths where what is under test is the
+   * evaluator's decision rather than the suite's behaviour.
+   *
+   * `evaluateDefect` spawns a real Vitest twice per defect, so proving "this
+   * scratch tree was already red" honestly would cost a full run per assertion.
+   * The shim answers from the tree it is started in: `watched.txt` says which
+   * world it is in, and `src/sample.ts` holds the text a defect mutates. The
+   * outcomes an operator reads — caught and escaped against the real suite — are
+   * proved below with real defects and a real Vitest; what this proves is only
+   * that the evaluator declines to attribute what it cannot attribute.
+   */
+  const SHIM_SOURCE = [
+    'import { readFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'const read = (path) => readFileSync(join(process.cwd(), path), "utf8");',
+    'const world = read("watched.txt").trim();',
+    'if (world === "hang") {',
+    '  // Outlive the caller: only the evaluator\'s timeout can end this run.',
+    '  setTimeout(() => {}, 2 ** 30);',
+    "}",
+    'const mutated = read("src/sample.ts");',
+    'const fails =',
+    '  world === "red" ||',
+    '  (world === "red-after-mutation" && mutated.includes("const a = 2;"));',
+    "if (fails) {",
+    '  const file = world === "red" ? "environmental" : "sample";',
+    '  console.log(` FAIL  tests/${file}.test.ts > a check noticed something`);',
+    '  console.log(" Test Files  1 failed | 1 passed (2)");',
+    "  process.exit(1);",
+    "}",
+    'console.log(" Test Files  1 passed (1)");',
+    "",
+  ].join("\n");
+
+  /**
+   * A repository whose scratch tree answers deterministically.
+   *
+   * `node_modules` is built here because `createScratch` copies it explicitly, and
+   * the evaluator resolves its runner from the scratch tree: a root without one
+   * never gets as far as running anything, which is a separate outcome with its
+   * own test below.
+   */
+  function shimRoot(world: "green" | "red" | "red-after-mutation" | "hang"): string {
+    const root = mkdtempSync(join(tmpdir(), "corpus-shim-"));
+    mkdirSync(join(root, "node_modules", "vitest"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(join(root, "tests"), { recursive: true });
+    writeFileSync(join(root, "watched.txt"), `${world}\n`);
+    writeFileSync(join(root, "node_modules", "vitest", "vitest.mjs"), SHIM_SOURCE);
+    writeFileSync(join(root, "src", "sample.ts"), "const a = 1;\n");
+    writeFileSync(join(root, "tests", "sample.test.ts"), "it('sample', () => {});\n");
+    return root;
+  }
+
+  /**
+   * Hands back exactly what `loadCorpus` returned, un-narrowed. The cast is the
+   * point: it stands for the caller who skipped the type guard, and the
+   * assertions below are about what the evaluator does with the consequence.
+   */
+  function asUnnarrowed(entry: unknown): EvaluableDefect {
+    return entry as EvaluableDefect;
+  }
+
+  it("extracts failing test files from vitest output", () => {
+    const output = [
+      " FAIL  tests/scope.test.ts > reports no gate when paths are undeclared",
+      " FAIL  tests/repair.test.ts > escalates at the limit",
+      " Test Files  1 failed | 1 passed (2)",
+    ].join("\n");
+    expect(extractFailingTests(output).sort()).toEqual([
+      "tests/repair.test.ts",
+      "tests/scope.test.ts",
+    ]);
+  });
+
+  it("returns an empty list when nothing failed", () => {
+    expect(extractFailingTests(" Test Files  22 passed (22)")).toEqual([]);
+  });
+
+  it("extracts the same files from coloured output", () => {
+    // Vitest colours its output when it decides it has a terminal, so a parser
+    // that only understands a plain pipe would find no failed files in a
+    // coloured run — which would read as a failure nothing could be credited for.
+    const plain = " FAIL  tests/scope.test.ts > reports no gate when paths are undeclared";
+    const coloured = `\u001b[31m${plain.slice(0, 6)}\u001b[39m\u001b[2mtests/scope.test.ts\u001b[22m > reports no gate when paths are undeclared`;
+    expect(extractFailingTests(coloured)).toEqual(extractFailingTests(plain));
+  });
+
+  it("credits a file once however many of its tests failed", () => {
+    const output = [
+      " FAIL  tests/scope.test.ts > reports no gate when paths are undeclared",
+      " FAIL  tests/scope.test.ts > says so in the gate",
+    ].join("\n");
+    expect(extractFailingTests(output)).toEqual(["tests/scope.test.ts"]);
+  });
+
+  it("reports an escaped defect when the suite passes on a mutated tree", async () => {
+    // A defect that changes nothing observable: the suite passes, so the
+    // control has no test watching it.
+    const outcome = await evaluateDefect(process.cwd(), {
+      id: "no-op",
+      aimsAt: "tests/mutation-runner.test.ts",
+      why: "a defect that changes nothing, to prove escape detection works",
+      file: "src/kernel/repair.ts",
+      find: 'export type RepairLoopStatus = "verified" | "escalated";',
+      replace: 'export type RepairLoopStatus = "verified" | "escalated" | "still_worse";',
+      expected: "caught",
+    });
+    expect(outcome.outcome).toBe("escaped");
+    expect(outcome.caughtBy).toEqual([]);
+    expect(outcome.durationMs).toBeGreaterThanOrEqual(0);
+  }, 300000);
+
+  it("reports a corpus error, never an escape, when the anchor has drifted", async () => {
+    const outcome = await evaluateDefect(process.cwd(), {
+      id: "drifted",
+      aimsAt: "tests/mutation-runner.test.ts",
+      why: "an anchor that no longer exists must not be reported as an escape",
+      file: "src/kernel/repair.ts",
+      find: "this text is not in the file",
+      replace: "anything",
+      expected: "caught",
+    });
+    expect(outcome.outcome).toBe("corpus-error");
+    expect(outcome.reason).toMatch(/exactly once/);
+  }, 30000);
+
+  it("catches a defect the suite is known to catch", async () => {
+    const outcome = await evaluateDefect(process.cwd(), {
+      id: "repair-limit-never-reached",
+      aimsAt: "tests/repair.test.ts",
+      why: "bounded repair is what stops an unbounded retry",
+      file: "src/kernel/repair.ts",
+      find: "export const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;",
+      replace: "export const DEFAULT_MAX_REPAIR_ATTEMPTS = 1000;",
+      expected: "caught",
+    });
+    expect(outcome.outcome).toBe("caught");
+    expect(outcome.caughtBy.length).toBeGreaterThan(0);
+  }, 300000);
+
+  it("attributes the failures a mutation added, having proved the tree was green", async () => {
+    // The baseline run is what makes "caught" mean something. Here it is green
+    // and the mutation is noticed, so the failure can be credited — a claim the
+    // single-run design could not make.
+    const outcome = await evaluateDefect(shimRoot("red-after-mutation"), validDefect());
+    expect(outcome.outcome).toBe("caught");
+    expect(outcome.caughtBy).toEqual(["tests/sample.test.ts"]);
+  }, 30000);
+
+  it("reports a corpus error, and attributes nothing, when the scratch tree is already red", async () => {
+    // The systematic false positive: a check that fails in a scratch environment
+    // for reasons of its own fails for every defect applied to it. Reporting
+    // "caught" here would mean "the suite failed", not "the mutation was
+    // noticed" — and an environment that cannot produce a clean baseline cannot
+    // produce an attributable result.
+    const outcome = await evaluateDefect(shimRoot("red"), validDefect());
+    expect(outcome.outcome).toBe("corpus-error");
+    expect(outcome.caughtBy).toEqual([]);
+    expect(outcome.reason).toMatch(/already failing/);
+    expect(outcome.reason).toMatch(/tests\/environmental\.test\.ts/);
+  }, 30000);
+
+  it("reports a corpus error when the suite cannot start at all", async () => {
+    // No runner in the scratch tree means no check ran, so there is nothing to
+    // catch and nothing to escape. Left uncaught, this would be reported as an
+    // escape for every defect in the corpus.
+    const outcome = await evaluateDefect(populatedRoot(), validDefect());
+    expect(outcome.outcome).toBe("corpus-error");
+    expect(outcome.caughtBy).toEqual([]);
+    expect(outcome.reason).toMatch(/could not start/);
+  }, 30000);
+
+  it("reports a corpus error when the suite does not finish", async () => {
+    // A timeout is not evidence in either direction: the run neither passed nor
+    // failed, so reporting it as an escape would claim a check missed something
+    // on the strength of a process that was still thinking.
+    const outcome = await evaluateDefect(shimRoot("hang"), validDefect(), { timeoutMs: 1000 });
+    expect(outcome.outcome).toBe("corpus-error");
+    expect(outcome.caughtBy).toEqual([]);
+    expect(outcome.reason).toMatch(/did not finish within/);
+  }, 30000);
+
+  it("reports a corpus error for a corpus entry that is not a defect", async () => {
+    // `loadCorpus` hands back whatever the file contained, so narrowing is the
+    // caller's job. This is the caller who skipped it: the result must be a
+    // corpus-error naming the problem, not a TypeError that takes the run down
+    // and is attributed to no defect at all.
+    const root = populatedRoot([null]);
+    const [entry] = loadCorpus(root).defects;
+    expect(entry).toBeNull();
+
+    const outcome = await evaluateDefect(root, asUnnarrowed(entry));
+    expect(outcome.outcome).toBe("corpus-error");
+    expect(outcome.caughtBy).toEqual([]);
+    expect(outcome.id).toBe("<unnamed>");
+    expect(outcome.reason).toMatch(/not an object/);
+  }, 30000);
+
+  it("leaves no scratch tree behind, whichever outcome it reports", async () => {
+    // A corpus run builds one full tree per defect. A tree left behind per
+    // outcome would fill the disk on the run that most needed to be believed.
+    const worlds = ["green", "red", "red-after-mutation"] as const;
+    const roots = worlds.map(shimRoot);
+    const scratchTrees = (): string[] =>
+      readdirSync(tmpdir())
+        .filter((entry) => entry.startsWith("factory-mutation-"))
+        .sort();
+    const before = scratchTrees();
+    for (const root of roots) {
+      await evaluateDefect(root, validDefect());
+    }
+    expect(scratchTrees()).toEqual(before);
+  }, 30000);
+
+  it("keeps its own test file out of the suite it evaluates", () => {
+    // Running the evaluator inside the suite it evaluates would recurse: the
+    // inner run would collect these tests, each of which spawns two full runs of
+    // its own, and the cost would grow with every generation. The harness's own
+    // checks are not witnesses for a defect in the product either, so they are
+    // kept out of the subject suite. Exported so the runner can refuse a corpus
+    // defect that aims at an excluded file instead of reporting it as an escape.
+    expect(SUITE_EXCLUDE).toContain("tests/mutation-runner.test.ts");
   });
 });
