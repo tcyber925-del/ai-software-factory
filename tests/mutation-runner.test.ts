@@ -966,3 +966,90 @@ describe("suite exclusion merging", () => {
     }
   }, 120000);
 });
+
+import { readFileSync as readSync } from "node:fs";
+import { checkRatchet } from "../scripts/mutation/ratchet.mjs";
+
+const checkRatchetTyped = checkRatchet as unknown as (
+  ratchet: { defects: number },
+  outcomes: { id: string; outcome: string }[],
+) => { ok: boolean; problems: string[] };
+
+describe("ratchet", () => {
+  const caught = (id: string) => ({ id, outcome: "caught" });
+
+  it("passes when every defect is caught and none were removed", () => {
+    const result = checkRatchetTyped(
+      { defects: 2 },
+      [caught("a"), caught("b")],
+    );
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it("fails when a defect escapes", () => {
+    const result = checkRatchetTyped({ defects: 1 }, [
+      { id: "a", outcome: "escaped" },
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toMatch(/escaped/);
+  });
+
+  it("fails when the corpus has shrunk", () => {
+    const result = checkRatchetTyped({ defects: 5 }, [caught("a")]);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toMatch(/shrunk|fewer/i);
+  });
+
+  it("fails when a defect could not be evaluated", () => {
+    const result = checkRatchetTyped({ defects: 1 }, [
+      { id: "a", outcome: "corpus-error" },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("records a corpus at least as large as the shipped ratchet", () => {
+    const ratchet = JSON.parse(readSync("defects/ratchet.json", "utf8"));
+    expect(ratchet.defects).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("ratchet aim floor", () => {
+  const checkRatchetLoose = checkRatchet as unknown as (
+    ratchet: { defects: number },
+    outcomes: Record<string, unknown>[],
+  ) => { ok: boolean; problems: string[] };
+
+  it("passes when each defect's aimsAt is inside its caughtBy, extras included", () => {
+    const result = checkRatchetLoose({ defects: 1 }, [
+      {
+        id: "a",
+        outcome: "caught",
+        aimsAt: "tests/a.test.ts",
+        caughtBy: ["tests/a.test.ts", "tests/extra.test.ts"],
+      },
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it("fails when a defect is caught but its own aimsAt is not among the catchers", () => {
+    const result = checkRatchetLoose({ defects: 1 }, [
+      {
+        id: "a",
+        outcome: "caught",
+        aimsAt: "tests/a.test.ts",
+        caughtBy: ["tests/other.test.ts"],
+      },
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toMatch(/aimsAt/);
+  });
+
+  it("fails when a caught defect names no catchers at all", () => {
+    const result = checkRatchetLoose({ defects: 1 }, [
+      { id: "a", outcome: "caught", aimsAt: "tests/a.test.ts", caughtBy: [] },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+});
