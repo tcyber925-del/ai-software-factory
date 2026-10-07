@@ -1,0 +1,47 @@
+name: opencode-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  review:
+    # Fork PRs get no secrets (and OIDC claims would not match), so only run
+    # same-repo PRs — and only once they are out of draft.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    # Review rounds grew past the original 15-min cap once the battery and
+    # PR body expanded — two round-15 runs were killed at it (cancelled
+    # conclusion, no comment posted). 25 gives headroom over the ~12–14-min
+    # steady-state rounds.
+    timeout-minutes: 25
+    concurrency:
+      group: opencode-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run OpenCode review
+        # SHA-pinned (ENG-87) — `latest` peels to the github-vX action line;
+        # Dependabot keeps this current.
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/mimo-v2.6-flash-free
+          prompt: |
+            Review this pull request as an advisory reviewer: report findings only —
+            do not edit code, push commits, or submit formal approvals.
+            - Read AGENTS.md first and check the change against it: one issue = one
+              PR, no invented claims or metrics, no unapproved dependencies or
+              backend/database/CMS/auth, accessibility and semantic HTML preserved.
+            - Check for code quality issues and potential bugs.
+            - Cite file paths for each finding, ordered by severity. If nothing
+              needs attention, say so briefly.
