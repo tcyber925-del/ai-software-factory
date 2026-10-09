@@ -144,6 +144,30 @@ call graph. Treat this as the reason human review stays required even on a green
 
 Dependencies are installed with `npm ci`, and `package-lock.json` has been byte-identical through every unit shipped so far: the factory has zero runtime dependencies and no devDependency has been added or upgraded. Nineteen Work Units have shipped; numbering is not contiguous, and `FCT-014` merged from a branch named `FCT-021-security-hardening`.
 
+### The mutation rung
+
+`docs/verification-and-merge-gates.md` states that the suite's non-vacuity was proven by
+deliberately weakening the implementation and confirming the tests then failed. `npm run mutations`
+re-checks that claim on every run: `defects/mutations.json` holds five named degradations of this
+repository's own controls, each naming the check meant to catch it, and
+`scripts/mutation/run.mjs` applies them one at a time in a scratch tree and records which test
+file failed.
+
+It runs as a **separate, non-blocking** `mutation` job. Making it blocking requires the settings
+in the previous section to hold for it as well, and that is a decision for a person, not a default.
+
+Two properties are deliberate. The working tree is never written — mutations are applied to a
+throwaway copy — so an interrupted run cannot leave a degraded `src/` behind, which is the failure
+mode that makes an in-place mutation unsafe in CI. And a mutation that cannot be evaluated is
+reported as a corpus error, never as an escape: an escape claims a check missed something, and a
+defect that never ran is not evidence.
+
+The scope-control composition — a violation detected by `checkScope`, passed through the pipeline
+as `scopeReason`, and read by `buildIntegrationResult` — has no test that asserts the whole path.
+The two halves are tested separately and the wire between them is not. This is the same
+absence-of-a-caller shape as the Linear intake gap above, one level down, and it is recorded rather
+than left for a reader to discover.
+
 ## Dependency installation
 
 CI installs dependencies with `npm ci` against the committed `package-lock.json`.

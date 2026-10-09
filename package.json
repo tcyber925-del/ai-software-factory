@@ -11,7 +11,8 @@
     "build:cli": "tsc -p tsconfig.build.json",
     "factory": "node dist/bin.js",
     "test": "vitest run",
-    "verify": "npm run build && npm run build:cli && npm test"
+    "verify": "npm run build && npm run build:cli && npm test",
+    "mutations": "node scripts/mutation/run.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
