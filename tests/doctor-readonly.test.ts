@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import type { DoctorProbe } from "../src/doctor/probe.js";
 import { createSystemProbe } from "../src/doctor/probe.js";
 import { REQUIRED_PROJECT_FILES, runDoctor } from "../src/doctor/doctor.js";
 
@@ -82,10 +83,40 @@ describe("the doctor does not mutate project state", () => {
 
   it("is safe to run twice with identical results", async () => {
     const repo = await makeRepo();
+    // The real probe shells out to `<runtime> --version`, so two runs can
+    // disagree when one binary answers slowly and the next does not. That is
+    // the machine's timing, not the doctor's determinism, so it is removed
+    // here: determinism is a property of how runDoctor aggregates a probe, and
+    // asserting it through live process timing made this test fail under load.
+    // What the *system* probe reads on a real machine is covered separately in
+    // "the doctor reads the real environment correctly" below.
     const probe = createSystemProbe(repo);
-    const first = await runDoctor({ probe });
-    const second = await runDoctor({ probe });
+    const deterministic: DoctorProbe = {
+      ...probe,
+      runtimeAvailability: async (runtime) => ({ available: runtime === "opencode", version: "1.2.3" }),
+    };
+    const first = await runDoctor({ probe: deterministic });
+    const second = await runDoctor({ probe: deterministic });
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+
+  it("still reports a difference when the probe genuinely changes", async () => {
+    // The guard on the test above: a determinism assertion that cannot fail is
+    // not a determinism assertion. A probe whose availability answer changes
+    // between runs must produce different reports.
+    const repo = await makeRepo();
+    let available = true;
+    const changing: DoctorProbe = {
+      ...createSystemProbe(repo),
+      runtimeAvailability: async (runtime) => {
+        const result = { available: available && runtime === "opencode", version: "1.2.3" };
+        available = false;
+        return result;
+      },
+    };
+    const first = await runDoctor({ probe: changing });
+    const second = await runDoctor({ probe: changing });
+    expect(JSON.stringify(second)).not.toBe(JSON.stringify(first));
   });
 });
 
