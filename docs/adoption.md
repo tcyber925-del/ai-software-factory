@@ -28,16 +28,20 @@ self-authorizing correctness.
 - **Hermes** is optional and unchecked. `factory doctor` does not report it, so
   verify `hermes --version` yourself if you intend to use it.
 
-### If you use `factory verify`, define these scripts
+### If you use `factory verify`, declare your checks
 
-`factory verify` shells out to five `npm run` targets in order: `format:check`, `lint`, `typecheck`,
-`test`, `build`. Your adopting project must define the first three or the command exits `1` on the
-first one. The factory's own repository does not define them, which is why `npm run verify` is the
-working equivalent there and `factory verify` is not.
+`factory verify` reads your `package.json` and runs the checks you declare. If you
+declare a `verify` script it runs that alone — that is your aggregate contract, and
+running the individual steps as well would execute your suite twice. Otherwise it runs
+each of `format:check`, `lint`, `typecheck`, `test`, and `build` that you declare, and
+reports the rest as `skip`.
 
-Treat `format:check` and `lint` as required signals, not placeholders. A script that runs and reports
-success without checking anything turns the gate green without verifying anything, which is the exact
-failure this policy exists to prevent.
+Declaring none of them is a **failure**, not a pass: a verification command that
+verified nothing must never report success.
+
+Treat `format:check` and `lint` as required signals, not placeholders. A script that runs
+and reports success without checking anything turns the gate green without verifying
+anything, which is the exact failure this policy exists to prevent.
 
 Verify your environment:
 
@@ -200,7 +204,7 @@ inside the skill.
 - [ ] `.factory/policies/` reflects this project's real boundaries
 - [ ] At least one example Work Unit authored
 - [ ] `node dist/bin.js work validate` accepts it
-- [ ] If you will use `factory verify`: `format:check`, `lint`, and `typecheck` scripts defined and meaningful
+- [ ] If you will use `factory verify`: a `verify` script, or at least one of `format:check`, `lint`, `typecheck`, `test`, `build` — and it is meaningful, not a placeholder
 - [ ] No `node_modules/` or build output committed
 - [ ] Secrets supplied by environment, never committed
 
