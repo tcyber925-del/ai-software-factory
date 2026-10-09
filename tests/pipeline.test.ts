@@ -7,6 +7,7 @@ import { runPipeline } from "../src/kernel/pipeline.js";
 import type { ScheduledWorkUnit } from "../src/kernel/scheduler.js";
 import type { LabelledRuntime } from "../src/kernel/work-unit.js";
 import type { ShellRunner } from "../src/adapters/verification/shell.js";
+import type { ChangedFiles } from "../src/adapters/git/changes.js";
 import { FakeRuntime } from "../src/fake-runtime.js";
 import { InMemoryEventLog } from "../src/state/event-log.js";
 import { reconstructExecution } from "../src/state/provenance.js";
@@ -862,4 +863,141 @@ describe("the executed worktree survives until verification has read it", () => 
     expect(checkCwd).not.toBeNull();
     expect(existsSync(checkCwd!)).toBe(false);
   }, 20_000);
+});
+
+describe("a scope violation reaches the integration gate through the pipeline", () => {
+  // The scoper is tested directly in tests/scope.test.ts, and the integration
+  // gate is tested directly in tests/integration.test.ts. Neither can catch the
+  // wiring between them: that a violation detected in one stage actually stops
+  // the other. That wiring is what failed in dogfooding, and what the FCT-030
+  // corpus cannot reach — it reports this defect as caught by the scoper's own
+  // test, which is the scoper working, not the wiring.
+  //
+  // So: green verification, a completed runtime, and an out-of-scope change.
+  // Nothing but the scope violation can explain a block.
+
+  /**
+   * A runtime whose worktree is a real directory.
+   *
+   * `FakeRuntime` returns a fictional path, and `evaluateScope` compares a real
+   * worktree's changed files against declared `paths`. With a fictional path
+   * there is nothing to compare, so the scope gate is skipped and these tests
+   * would pass for the wrong reason — proving nothing about the wiring.
+   */
+  const scopingRuntime = () => {
+    let n = 0;
+    const root = join(tmpdir(), "factory-scope-probe");
+    mkdirSync(root, { recursive: true });
+    return {
+      name: "scoping-runtime",
+      runtime: {
+        capabilities: async () => ["testing"],
+        health: async () => ({ available: true, runtime: "scoping-runtime" }),
+        createWorkspace: async () => ({ id: `ws-${++n}`, path: root }),
+        createWorktree: async (workspace: WorkspaceRef) => {
+          const worktreePath = join(workspace.path, `worktree-${++n}`);
+          mkdirSync(worktreePath, { recursive: true });
+          return { ...workspace, worktreePath };
+        },
+        startAgent: async () => ({ id: "agent", runtimeId: "agent" }),
+        promptAgent: async () => {},
+        waitAgent: async () => "idle",
+        inspectAgent: async () => ({ status: "idle" }),
+        collectRuntimeEvidence: async () => ({ runtime: "scoping-runtime", workspaceId: "ws", agentId: "agent", events: [] }),
+        cleanupWorkspace: async (workspace: WorkspaceRef) => {
+          if (workspace.worktreePath) rmSync(workspace.worktreePath, { recursive: true, force: true });
+        },
+      },
+    } satisfies LabelledRuntime;
+  };
+
+  const outOfScope: ChangedFiles = async () => ["src/other-module/thing.ts", "package-lock.json"];
+
+  it("blocks integration when every other stage is green and scope is violated", async () => {
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [scopingRuntime()],
+      checks,
+      cwd: ".",
+      changedFiles: outOfScope,
+      runner: passing,
+      ...clock(),
+    });
+
+    const run = result.runs[0]!;
+    // Everything else succeeded, so scope is the only possible cause.
+    expect(run.execution.status).toBe("completed");
+    expect(run.verification.status).toBe("passed");
+
+    expect(result.status).toBe("blocked");
+    expect(run.integration.state).toBe("blocked");
+    expect(run.integration.reason).toMatch(/out-of-scope changes/);
+    // Naming the offending file is what makes the block actionable.
+    expect(run.integration.reason).toContain("src/other-module/thing.ts");
+    // And the lockfile caveat, because a lockfile is reviewed as source.
+    expect(run.integration.reason).toMatch(/dependency lockfile/);
+  });
+
+  it("reaches integration.ready when the same work stays in scope", async () => {
+    const inScope: ChangedFiles = async () => ["src/W-1/thing.ts"];
+
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [scopingRuntime()],
+      checks,
+      cwd: ".",
+      changedFiles: inScope,
+      runner: passing,
+      ...clock(),
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.runs[0]?.integration.state).toBe("ready");
+    // The scope check ran; it simply found nothing. "No gate" and "gate passed"
+    // are different states and the record must not conflate them.
+    expect(result.runs[0]?.scope?.outOfScope).toEqual([]);
+    expect(result.runs[0]?.scope?.undeclared).toBe(false);
+  });
+
+  it("reports both problems when verification fails and scope is violated", async () => {
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [scopingRuntime()],
+      checks,
+      cwd: ".",
+      changedFiles: outOfScope,
+      runner: failing,
+      repairPolicy: { maxAttempts: 0 },
+      ...clock(),
+    });
+
+    const run = result.runs[0]!;
+    expect(run.integration.state).toBe("blocked");
+    // The verification verdict leads, because the work is wrong regardless of
+    // where it touched — but the scope violation is appended rather than
+    // dropped. Reporting only one of two real problems hides the other.
+    expect(run.integration.reason).toMatch(/verification/);
+    expect(run.integration.reason).toMatch(/out-of-scope changes/);
+  });
+
+  it("reaches integration.ready when scope is unchecked rather than clean", async () => {
+    // No changedFiles provider means no scope gate ran. That must be recorded
+    // as "not checked" and never read as "in scope" — the honest answer when
+    // the factory cannot see what changed.
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [scopingRuntime()],
+      checks,
+      cwd: ".",
+      runner: passing,
+      ...clock(),
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.runs[0]?.scope).toBeUndefined();
+  });
 });
