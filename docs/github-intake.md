@@ -175,18 +175,24 @@ reason the signal is a label.
 
 ## Live GitHub access
 
-**Not built.** The adapter reads records; it has no network or process capability, and `src/cli/`
-does not read GitHub. A caller that wants live data fetches it and hands the records to the
-adapter. This is the honest reading of criterion 13 — live access, if it is ever supported, must be
-explicit opt-in and must not be required by CI, and the offline fixtures already cover both the
-accepted and every refused path.
+**Not built.** The adapter reads records; it has no network or process capability. A caller
+that wants live data fetches it and hands the records to the adapter. `factory intake
+--source github` reads a **records file** the same way it reads a Linear one, so it is not
+live access and needs no credential. This is the honest reading of criterion 13 — live
+access, if it is ever supported, must be explicit opt-in and must not be required by CI, and
+the offline fixtures already cover both the accepted and every refused path.
 
-## Not reachable from the CLI
+## Composed into the CLI as planning
 
-This adapter is a library. No `factory` command reads GitHub, calls `evaluateGitHubEligibility`, or
-emits anything. FCT-029 owns CLI composition; wiring this adapter into `src/cli/` is that unit's
-work, and it must preserve the default-empty allowlist so a CLI flag cannot become a way to dispatch
-an arbitrary issue.
+`factory intake --source github --records <issues.json> --out <plan.json>` plans from GitHub
+issues through this adapter and writes a plan file. It calls
+`evaluateGitHubEligibility` and nothing else: no issue is written, no label applied, no
+transition proposed, and no work dispatched — the last line of its output names the separate
+`factory work run` step.
+
+`--eligible-label` **sets** the allowlist, which is the human decision the default-empty rule
+exists to require. There is no flag that bypasses it, so a CLI operator cannot point this at a
+repository and turn its whole open backlog into a dispatch queue.
 
 ## Boundary
 

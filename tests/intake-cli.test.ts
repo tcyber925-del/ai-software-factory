@@ -4,8 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { runPipeline } from "../src/kernel/pipeline.js";
+import type { JsonSchema } from "../src/kernel/json-schema.js";
+import { validateAgainstSchema } from "../src/kernel/json-schema.js";
 import { dispatch } from "../src/cli/index.js";
 import { readWorkUnitFile } from "../src/cli/args.js";
+import { FakeRuntime } from "../src/fake-runtime.js";
 
 /**
  * `factory intake`: one command, two providers, one plan file.
@@ -523,8 +527,99 @@ describe("a mistake in the invocation is an error, not an empty plan", () => {
   });
 });
 
+describe("intake refusal and scheduler refusal are two different reports", () => {
+  /**
+   * `work run` once printed "intake refused" while reading `planSchedule` decisions, so
+   * an operator could not tell a refused issue from a Work Unit the scheduler blocked.
+   * Both reports are produced by this repository, so the distinction is asserted by
+   * producing both here rather than by checking one string.
+   */
+  it("reports a refused record as intake and a blocked unit as the scheduler", async () => {
+    const out = join(scratch("identity"), "plan.json");
+    const intake = await run(githubArgs(out));
+
+    // Issue 901 is open and fully declared, and carries no eligibility label.
+    const intakeRefusal = intake.lines.find((line) => line.includes("acme/widgets#901"));
+    if (intakeRefusal === undefined) throw new Error("unreachable: 901 is refused");
+    expect(intakeRefusal).toContain("intake refused acme/widgets#901 (github): not_allowlisted");
+    expect(intakeRefusal).not.toContain("scheduler");
+    expect(intakeRefusal).not.toContain("blocked");
+
+    // The same vocabulary, on the other side: a Work Unit whose declared capabilities
+    // no runtime provides is blocked by the scheduler, and the reason names the
+    // scheduler and never says "intake".
+    const blocked = await runPipeline({
+      workUnits: [
+        {
+          workUnit: {
+            id: "ENG-903",
+            goal: "Content schema slug validation",
+            repository: "acme/widgets",
+            capabilities: ["a-capability-no-runtime-provides"],
+            acceptanceCriteria: ["Duplicate slugs fail the build."],
+          },
+          paths: ["src/slug"],
+        },
+      ],
+      schema: JSON.parse(readFileSync("schemas/work-unit.schema.json", "utf8")) as JsonSchema,
+      runtimes: [{ name: "fake", runtime: new FakeRuntime() }],
+      checks: [{ name: "noop", command: "true" }],
+      cwd: process.cwd(),
+      // A fixed clock so the comparison is about wording, not about time.
+      now: () => "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.reason).toContain("scheduler blocked");
+    expect(blocked.reason).not.toContain("intake");
+  });
+});
+
+describe("the documentation matches what shipped", () => {
+  const cli = readFileSync("docs/cli.md", "utf8");
+
+  it("documents the command, its flags, and that it writes rather than runs", () => {
+    // A command an operator cannot discover is not a command. The three flags that
+    // cannot be guessed are which provider, where the records are, and where the plan
+    // goes — so all three are named in the doc, not just in `--help`.
+    expect(cli).toMatch(/factory intake/);
+    expect(cli).toMatch(/--source/);
+    expect(cli).toMatch(/--records/);
+    expect(cli).toMatch(/--out\b/);
+    // And the two steps stay visibly separate, because that is the decision FCT-018
+    // deferred: intake plans, a human runs.
+    expect(cli).toMatch(/nothing (was |is )?dispatch/i);
+  });
+
+  it("no longer claims that no CLI command reads a provider", () => {
+    // This claim was true when written and is false now, for both providers.
+    for (const path of [
+      "docs/cli.md",
+      "docs/protocols.md",
+      "docs/linear-adapter.md",
+      "docs/github-intake.md",
+      "README.md",
+    ]) {
+      const body = readFileSync(path, "utf8");
+      expect(body, `${path} still says no CLI command reads a provider`).not.toMatch(
+        /No CLI command reads Linear|no `factory` command reads a provider|not reachable from the CLI/i,
+      );
+    }
+  });
+
+  it("states where provenance survives, rather than implying it is on the Work Unit", () => {
+    // The interesting question about a plan entry is how a reader traces it back to
+    // its issue, and the honest answer is the id plus the report — not a provider field
+    // inside a provider-neutral contract.
+    expect(cli).toMatch(/provenance/i);
+  });
+});
+
 describe("the same inputs plan the same bytes, twice", () => {
   it("produces an identical plan file for identical records and policy", async () => {
+    // Multi-unit on purpose: a single-unit plan is byte-identical to almost any
+    // serialisation, so the determinism claim is only worth making over a plan whose
+    // order and content both had something to get wrong.
     const args = (out: string): string[] => [
       "intake", "--source", "linear", "--records", LINEAR_FIXTURE, "--out", out,
       "--repository", "acme/widgets", "--eligible-status", "started", "--eligible-status-name", "In Progress",
@@ -537,8 +632,45 @@ describe("the same inputs plan the same bytes, twice", () => {
 
     // The plan is a document a human reviews before work runs, so re-running intake
     // must not rewrite what they agreed to. A timestamp would break this.
+    expect(writtenPlan(first)).toHaveLength(2);
     expect(readFileSync(second, "utf8")).toBe(readFileSync(first, "utf8"));
     expect(readFileSync(first, "utf8")).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("keeps a multi-source plan stable across both providers", async () => {
+    // The brief's criterion is "multi-Work Unit intake is deterministic for the same
+    // source inputs and policy config", so the check runs both providers and compares
+    // the pair rather than one provider twice.
+    const rounds: Array<{ files: string[]; units: number }> = [];
+    for (const round of [0, 1]) {
+      const linear = join(scratch(`multi-linear-${round}`), "plan.json");
+      const github = join(scratch(`multi-github-${round}`), "plan.json");
+      await run([
+        "intake", "--source", "linear", "--records", LINEAR_FIXTURE, "--out", linear,
+        "--repository", "acme/widgets", "--eligible-status", "started", "--eligible-status-name", "In Progress",
+      ]);
+      await run(githubArgs(github));
+      rounds.push({
+        files: [readFileSync(linear, "utf8"), readFileSync(github, "utf8")],
+        units: plannedIds(linear).length + plannedIds(github).length,
+      });
+    }
+
+    // Four units per round — two Linear, two GitHub — so the comparison is over
+    // something a shuffled or clock-stamped serialiser could actually differ on.
+    expect(rounds[0]?.units).toBe(4);
+    expect(rounds[1]?.files).toEqual(rounds[0]?.files);
+  });
+
+  it("orders planned units by the input order of the records", async () => {
+    // Determinism includes order. Sorting by id would make a plan stable while
+    // quietly reordering the work an operator reviewed.
+    const out = join(scratch("order"), "plan.json");
+    await run(githubArgs(out));
+
+    const parsed = readWorkUnitFile(out).map((scheduled) => scheduled.workUnit.id);
+    expect(parsed).toEqual(["acme/widgets#900", "acme/widgets#904"]);
+    expect([...parsed]).toEqual([...parsed].sort());
   });
 
   it("overwrites an existing plan rather than appending to it", async () => {

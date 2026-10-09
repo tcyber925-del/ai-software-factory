@@ -32,7 +32,8 @@ Approved specification
         ↓
 Work Unit  (declarative; capabilities, not providers)
         ↓
-Eligibility  (intake boundary — provider policy, explicit allowlist)   ← library, not composed
+Eligibility  (intake boundary — provider policy, explicit allowlist)   ← composed: `factory intake`
+                                                                          writes a plan, dispatches nothing
         ↓
 Security gate  (risk class → required isolation)                      ← composed, before dispatch
         ↓
@@ -63,7 +64,10 @@ PR / human review                                                      ← human
 Release / observe / learn                                              ← human-led
 ```
 
-The annotations matter. Four boxes are marked *library, not composed* or *human-led* because they are shipped and documented but not on the CLI's dispatch path. `src/kernel/pipeline.ts` composes only the boxes marked *composed*. See [cli.md](cli.md).
+The annotations matter. Every box marked *composed*, *human-led*, or *writes a plan* is shipped, documented and
+reachable; *composed* means `src/kernel/pipeline.ts` calls it, and *human-led* means it needs a person.
+Eligibility is the one box that is reachable but sits **before** the pipeline: `factory intake` composes it into a
+plan file, and dispatching that plan is the separate `factory work run`. See [cli.md](cli.md).
 
 The security gate runs **before** anything is dispatched — before a workspace, before a worktree,
 before a runtime is invoked — so a refusal has no aftermath to clean up. Each decision is persisted as
@@ -85,8 +89,18 @@ Provider-specific behavior belongs in adapters.
 
 Eligibility is where a provider's records become Work Units, so it is the seam where
 provider detail is most likely to leak into the factory protocol. `src/kernel/intake.ts`
-is that seam: a contract every task provider implements, with the Linear adapter as
-its first consumer.
+is that seam: a contract every task provider implements, with the Linear and GitHub
+adapters as its consumers. Both are reached by one command, `factory intake`, which
+selects the adapter by `--source` and plans from either — the seam is what makes one
+intake workflow possible, and the workflow is what keeps a second provider from arriving
+with its own execution path.
+
+`src/kernel/intake-plan.ts` sits beside the contract and holds the one part of planning
+that is not provider-specific: running a set of records through *any* adapter and
+collecting the two outcomes into a plan file. It lives in the kernel rather than in an
+adapter because two copies of that loop would be free to disagree about what a refusal
+looks like, and the disagreement is what made "intake refused" and "scheduler blocked"
+the same sentence once already.
 
 The contract is small on purpose. A provider supplies its own record type, its own
 policy type, and three things about them — how to identify a record, whether it is

@@ -97,14 +97,19 @@ against one. `describeIntakeOutcome` renders either outcome with the `intake` pr
 named, because `work run` once printed "intake refused" while reading `planSchedule` decisions and left
 a reader unable to tell an unsatisfied dependency from a refused issue.
 
-Intake is a library boundary rather than a dispatched step. No `factory` command reads a provider:
-`factory work run` begins from a plan of Work Units. See [cli.md](cli.md).
+Intake is a planning step, not a dispatched one. `factory intake --source <linear|github>`
+reads provider records, runs them through the boundary, and writes a plan file; it calls no
+part of the pipeline. Dispatching that plan is the separate, human-initiated
+`factory work run --work-units`, which is the only execution boundary — so adding a
+provider cannot add an execution path. See [cli.md](cli.md).
 
 Evaluation is deterministic. The same record and the same policy configuration produce an identical
 result: no clock, no randomness, no inferred fields. A refusal can therefore be reproduced to explain
 it, and a provider cannot drift between two runs without that showing up as a difference.
 
-See `docs/linear-adapter.md` for the rules the Linear adapter applies at this boundary.
+that is explicit opt-in and never required by CI. See `docs/github-intake.md` for the label
+signal GitHub uses, and `docs/linear-adapter.md` for the rules the Linear adapter applies at
+this boundary. Both are reachable through `factory intake`, which plans from either.
 
 ## Linear intake
 Linear is an execution system, not the factory protocol. Only explicitly eligible work dispatches:

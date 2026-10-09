@@ -158,16 +158,29 @@ Three properties are structural rather than promised:
 - **It is reproducible.** Same issues and policy, identical plan, input order, no clock. A plan is a
   document a human approves before work runs, so re-running intake must not rewrite what was agreed.
 
-## Not reachable from the CLI
+## Composed into the CLI as planning
 
-This adapter is a library. No `factory` command reads Linear, calls `evaluateEligibility`, or emits
-`integration.status_proposed`. A caller assembles the flow, and `buildLinearIntakePlan` is the
-composable seam it assembles from — it writes a plan, which is what the deferred FCT-018 question
-asked for, rather than piping straight into dispatch.
+This adapter is reachable: `factory intake --source linear --records <issues.json> --out
+<plan.json>` runs issues through the boundary and writes a plan file. That is the whole of
+what it does there. No `factory` command emits `integration.status_proposed` or calls
+`deriveOutcome` — status reflection stays a library path, because a transition needs a human
+acknowledgement the CLI has no business supplying.
 
-The `scheduler blocked` message the pipeline can print is a different thing entirely: `runPipeline`
-reads `planSchedule` decisions, so it is reporting a Work Unit the *scheduler* blocked — an
-unsatisfied dependency, a missing capability, a cycle — not an issue Linear refused.
+`buildLinearIntakePlan` remains the composable seam for a caller that wants the plan in
+process rather than on disk.
+
+The command does not dispatch, and the composition is visible in the output: the last line
+names the separate `factory work run --work-units <plan>` step. That answers the question
+FCT-018 deferred — intake writes a plan, and a human runs it — rather than piping straight
+into dispatch.
+
+The eligibility allowlist is still empty by default, and the CLI adds no flag around it.
+`--eligible-status` and `--eligible-status-name` *set* it; nothing overrides it.
+
+The `scheduler blocked` message the pipeline can print is a different thing entirely:
+`runPipeline` reads `planSchedule` decisions, so it is reporting a Work Unit the *scheduler*
+blocked — an unsatisfied dependency, a missing capability, a cycle — not an issue Linear
+refused.
 
 That distinction is carried in the types rather than left to prose. An `IntakeResult` and an
 `IntakePlanRefusal` are identified by `source.provider` + `source.reference` and carry **no**
@@ -176,8 +189,9 @@ That distinction is carried in the types rather than left to prose. An `IntakeRe
 kernel's `describeIntakeOutcome`, which prefixes `intake` and names the provider and record. A
 consumer therefore cannot report an intake refusal against a Work Unit that does not exist.
 
-`fixtures/linear/` holds recorded payloads so the rules are tested offline, but nothing in `src/cli/`
-reads them.
+`fixtures/linear/` holds recorded payloads so the rules are tested offline. `factory intake`
+reads them the same way it reads any records file: a local path, no network call, and no
+credential. `buildLinearIntakePlan` plans the identical result in process.
 
 ## Boundary
 

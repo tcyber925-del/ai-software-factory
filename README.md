@@ -39,10 +39,17 @@ Shipped as a library, **not** called by `work run`:
 
 | Capability | Module | Consequence |
 |---|---|---|
-| Linear intake and status reflection | `src/adapters/linear/` | No CLI command reads Linear; intake is a library call |
+| Linear status reflection | `src/adapters/linear/status.ts` | No CLI command proposes a status transition; `done` needs a human acknowledgement |
+| Live provider fetch | — | `factory intake` reads a records file. No credential, no socket, CI needs neither |
 
-`docs/linear-adapter.md` documents the intended behaviour. This table records what the CLI actually
-does.
+Composed **before** the pipeline rather than inside it:
+
+| Capability | Module | Consequence |
+|---|---|---|
+| Linear and GitHub intake | `src/adapters/linear/`, `src/adapters/github/` | `factory intake` writes a plan file. Dispatching it is a separate `factory work run` |
+
+`docs/linear-adapter.md` and `docs/github-intake.md` document the intended behaviour. These
+tables record what the CLI actually does.
 
 ## Core invariant
 
@@ -151,7 +158,7 @@ goes stale the moment a row is added:
 | 10 | Security classification and an isolation gate | `src/security/` — **composed**, evaluated before dispatch |
 | 11 | A `factory doctor` environment check | `src/doctor/` |
 | 12 | A runnable CLI composing the execution path | `src/kernel/pipeline.ts`, `src/cli/`, `src/bin.ts` |
-| 13 | Linear intake and status reflection | `src/adapters/linear/` — library only, no CLI command |
+| 13 | Provider-neutral intake and status reflection | `src/kernel/intake.ts`, `src/adapters/{linear,github}/` — **`factory intake` plans** from either; status reflection stays library-only |
 | 14 | A portable skill pack | `.agents/skills/` — 9 factory skills, 2 runtime skills |
 | 15 | Template packaging and an adoption path | `templates/`, `docs/adoption.md` |
 | 16 | MIT licensing and repository hygiene | `LICENSE`, `docs/licensing.md` |
@@ -237,6 +244,7 @@ committed artifact; a clean clone starts with no trace.
 | [docs/runtime-adapters.md](docs/runtime-adapters.md) | The `WorkerRuntime` contract and adapter obligations |
 | [docs/hermes-adapter.md](docs/hermes-adapter.md) | Hermes as an optional runtime, not an authority |
 | [docs/linear-adapter.md](docs/linear-adapter.md) | Linear intake and status reflection |
+| [docs/github-intake.md](docs/github-intake.md) | GitHub Issues intake |
 | [docs/security.md](docs/security.md) | Threat posture and defaults |
 | [docs/security-policy.md](docs/security-policy.md) | Risk classification and the isolation gate |
 | [docs/verification-and-merge-gates.md](docs/verification-and-merge-gates.md) | Verification and merge-gate policy |
@@ -272,7 +280,7 @@ shipped code.
 | Verification defaults to `npm test` | A project verifying another way passes `--checks <file.json>`; an empty list is refused |
 | Security risk signals are declared, not detected | The gate refuses `untrusted`/`destructive` work, but only from signals declared on the plan. It does not read the goal text to guess |
 | Scope is enforced, not advisory | An out-of-scope change blocks `ready`. A Work Unit declaring no `paths` gets no gate, recorded as `undeclared`. An audit and a gate, **not a sandbox** |
-| Linear intake is not composed | `src/adapters/linear/` has no CLI command; the "scheduler blocked" path in the pipeline reads scheduler decisions |
+| Intake is composed but does not dispatch | `factory intake` plans from Linear and GitHub issues into a plan file; running it is a separate `factory work run`. Linear status reflection and live provider fetch stay library-only |
 | CLI surface is narrower than the plan | Implemented: `work run`, `work validate`, `verify`, `doctor`. Not implemented: `init`, `work create`, `work status`, `workspace list` |
 | No SCM adapter | PR creation and merge stay human-led; the factory records the decision only |
 | No sandbox adapter | Nothing offers `sandbox` isolation, so `untrusted` and `destructive` work is **refused** at dispatch rather than run weakly |
