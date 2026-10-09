@@ -1,4 +1,9 @@
 import type { WorkUnit } from "../../protocol.js";
+import type {
+  IntakeEligibility,
+  IntakeRefusalClassification,
+  ProviderIntakeAdapter,
+} from "../../kernel/intake.js";
 
 /**
  * Linear intake: compile an eligible Linear issue into a provider-neutral Work Unit.
@@ -303,3 +308,91 @@ export function compileWorkUnit(options: CompileOptions): WorkUnitTraceability &
   };
   return { ...traceability, workUnit, decision };
 }
+
+/**
+ * The policy one Linear intake call runs under, in the shape the boundary wants:
+ * the record arrives as `runIntake`'s second argument, so this carries only what
+ * a caller knows *besides* the issue.
+ *
+ * Every field is optional on purpose, because "nothing is configured" is itself
+ * the case the factory must handle by refusing. An empty policy is not a request
+ * for defaults — it is the state in which no Linear work dispatches at all.
+ */
+export interface LinearIntakePolicy {
+  config?: LinearEligibilityConfig;
+  /** Issues the caller can resolve `blockedBy` against. */
+  knownIssues?: LinearIssue[];
+  /**
+   * Target repository. Required in practice: an issue without one is refused
+   * rather than compiled against a codebase nobody named.
+   */
+  repository?: string;
+  /** Overrides the base revision on the compiled Work Unit. */
+  baseRevision?: string;
+}
+
+/**
+ * Every Linear refusal reason, mapped to the boundary's coarse vocabulary.
+ *
+ * Exhaustive on purpose, and typed as `Record<RefusalReason, …>` so adding a
+ * reason to the rules above fails this file's typecheck until it is classified.
+ * A partial map would degrade to a silent default, and a Linear rule that cannot
+ * say why it refused becomes unreportable exactly when someone needs to know.
+ *
+ * Summarising does not discard detail: the provider's own reason code travels
+ * alongside as `providerReason`, and `check` names which check decided.
+ */
+export const LINEAR_REFUSAL_CLASSIFICATIONS: Record<RefusalReason, IntakeRefusalClassification> = {
+  backlog_or_hard_excluded_status: "not_dispatchable",
+  already_completed_or_canceled: "not_dispatchable",
+  status_not_eligible: "not_allowlisted",
+  blocked_by_label: "policy_blocked",
+  blocked_by_incomplete_issue: "dependency_incomplete",
+  blocked_by_unknown_issue: "dependency_unresolved",
+  missing_acceptance_criteria: "requirements_undeclared",
+  missing_capabilities: "requirements_undeclared",
+  missing_goal: "requirements_undeclared",
+  missing_repository: "target_undeclared",
+};
+
+/**
+ * The Linear adapter, as a consumer of the provider-neutral intake boundary.
+ *
+ * This is a binding, not a second implementation. `evaluate` and `compile` are
+ * one-line delegations to `evaluateEligibility` and `compileWorkUnit`, so every
+ * FCT-018 rule — the hard exclusions, the default-empty allowlist, the ordered
+ * refusal checks, blocking labels, `blockedBy` handling, the refusal to infer
+ * requirements or a repository — is reached exactly as it was written. A change
+ * to those rules needs no change here, and no rule can be softened by being
+ * re-expressed for the boundary.
+ *
+ * The mapping is the only new logic, and it loses nothing: the Linear reason code
+ * and the check that produced it are both carried through.
+ */
+export const linearIntakeAdapter: ProviderIntakeAdapter<LinearIssue, LinearIntakePolicy> = {
+  provider: "linear",
+
+  sourceId: (issue) => issue.id,
+  sourceUrl: (issue) => issue.url,
+
+  evaluate: (issue, policy): IntakeEligibility => {
+    const decision = evaluateEligibility({ ...policy, issue });
+    if (decision.eligible) return { eligible: true };
+    // `IntakeDecision` allows an eligible verdict with no reason, so the absent
+    // reason is handled rather than asserted away.
+    if (decision.reason === undefined) {
+      throw new Error(`linear refused ${issue.id} without stating a reason`);
+    }
+    return {
+      eligible: false,
+      refusal: {
+        classification: LINEAR_REFUSAL_CLASSIFICATIONS[decision.reason],
+        providerReason: decision.reason,
+        ...(decision.detail === undefined ? {} : { detail: decision.detail }),
+        ...(decision.check === undefined ? {} : { check: decision.check }),
+      },
+    };
+  },
+
+  compile: (issue, policy) => compileWorkUnit({ ...policy, issue }).workUnit,
+};
