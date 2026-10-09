@@ -13,6 +13,8 @@ import type { ExecutionRiskInput } from "../security/risk.js";
 import type { ChangedFiles } from "../adapters/git/changes.js";
 import { checkScope, describeScopeViolation } from "./scope.js";
 import type { ScopeCheck } from "./scope.js";
+import { detectContainmentBreach, describeContainmentBreach } from "./containment.js";
+import type { RepoSnapshot, RepoSnapshotProvider } from "./containment.js";
 import type { LabelledRuntime } from "./work-unit.js";
 import type { JsonSchema } from "./json-schema.js";
 import type { PlanScheduleOptions, ScheduledWorkUnit, SchedulePlan } from "./scheduler.js";
@@ -92,6 +94,19 @@ export interface RunPipelineOptions {
    * result records rather than treating as a pass.
    */
   changedFiles?: ChangedFiles;
+  /**
+   * Reads the repository root's state, so a write that lands outside the worktree
+   * can be told apart from a run that simply changed nothing.
+   *
+   * The scope gate reads the worktree's diff and is therefore blind to writes
+   * anywhere else: an agent that leaves its worktree leaves it clean, and the gate
+   * reports no violation. This option closes that from the other side by comparing
+   * the root before and after dispatch.
+   *
+   * Omitted means no containment gate, which the result records rather than
+   * treating as a pass.
+   */
+  repoSnapshot?: RepoSnapshotProvider;
   /**
    * Whether an out-of-scope change prevents `ready`. Defaults to `true` where
    * `paths` are declared: the point is to make the boundary real, and an opt-in gate
@@ -439,6 +454,33 @@ async function runOne(
    */
   // Hoisted so the `finally` below can release the workspace it created.
   let execution: ExecutionRecord | undefined;
+
+  // Containment baseline, read before any agent runs so a write outside the
+  // worktree is attributable to this run rather than to whatever state the
+  // checkout was already in.
+  //
+  // A failed read is recorded and then treated as no gate. It is deliberately not
+  // defaulted to an empty snapshot: two unreadable snapshots compare equal, so
+  // defaulting would report no breach on every run and disarm the check silently.
+  let containmentBefore: RepoSnapshot | undefined;
+  if (options.repoSnapshot !== undefined) {
+    try {
+      containmentBefore = await options.repoSnapshot(cwd);
+    } catch {
+      await eventLog?.append([
+        {
+          workUnitId: workUnit.id,
+          runId,
+          source: "factory",
+          type: "containment.unchecked",
+          payload: { reason: "the repository root could not be read before dispatch" },
+          id: id(),
+          timestamp: now(),
+        } as LoggableEvent,
+      ]);
+    }
+  }
+
   try {
     execution = await executeWorkUnit({
       ...base,
@@ -566,6 +608,31 @@ async function runOne(
 
     const scopeStrict = options.strictScope !== false && scope !== undefined && scope.outOfScope.length > 0;
 
+    // Containment — did anything move in the checkout the factory was given?
+    //
+    // Read after every dispatch and repair attempt, so it covers the whole run. A
+    // breach leads every other reason: the worktree this run verified is not the
+    // tree the work landed in, so any verdict beneath it describes the wrong tree.
+    const containmentAfter =
+      containmentBefore === undefined ? undefined : await readRepoSnapshot(options.repoSnapshot, cwd);
+    const containmentBreach =
+      containmentBefore === undefined || containmentAfter === undefined
+        ? undefined
+        : detectContainmentBreach(containmentBefore, containmentAfter);
+    if (containmentBreach !== undefined) {
+      await eventLog?.append([
+        {
+          workUnitId: workUnit.id,
+          runId,
+          source: "factory",
+          type: "containment.breached",
+          payload: { kind: containmentBreach.kind, files: [...containmentBreach.files] },
+          id: id(),
+          timestamp: now(),
+        } as LoggableEvent,
+      ]);
+    }
+
     // When the checks also failed, that verdict leads: the work is wrong regardless
     // of where it touched. The scope violation is appended rather than dropped,
     // because reporting only one of two real problems hides the other. When the
@@ -573,12 +640,9 @@ async function runOne(
     // literally true and completely misleading.
     const verificationReason = blockingReasonFor(execution, verification);
     const scopeReason = scopeStrict ? describeScopeViolation(scope) : undefined;
-    const combinedReason =
-      scopeReason === undefined
-        ? undefined
-        : verificationReason === undefined || verificationReason === "verification_passed"
-          ? scopeReason
-          : `${verificationReason}; ${scopeReason}`;
+    const containmentReason =
+      containmentBreach === undefined ? undefined : describeContainmentBreach(containmentBreach);
+    const combinedReason = foldReasons([containmentReason, verificationReason, scopeReason]);
 
     const integrationOutcome = await buildIntegrationResult({
       execution,
@@ -622,4 +686,43 @@ async function runOne(
       await releaseWorkspace(options.runtimes, execution, eventLog, runId, workUnit.id, id, now);
     }
   }
+}
+
+/**
+ * Reads the repository root after dispatch, or reports nothing to compare.
+ *
+ * A read that throws yields `undefined` rather than an empty snapshot, so a root
+ * that became unreadable mid-run is recorded as unchecked instead of being
+ * compared against a baseline that will never match anything. It does not block:
+ * the gate is best-effort evidence about a directory, and a root nobody can read is
+ * a fact worth recording, not a reason to stop the run on its own.
+ */
+async function readRepoSnapshot(
+  provider: RepoSnapshotProvider | undefined,
+  root: string,
+): Promise<RepoSnapshot | undefined> {
+  if (provider === undefined) return undefined;
+  try {
+    return await provider(root);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Joins the reasons a run did not reach `ready`, dropping the ones that do not apply.
+ *
+ * `verification_passed` is dropped because it is the absence of a problem, not a
+ * reason — reported as a blocking cause it would read as though passing verification
+ * had stopped the run, which is the opposite of what it means.
+ *
+ * Everything else is kept. A run with two real problems should report both, and the
+ * order is the caller's: containment, then the checks, then scope. Reporting one and
+ * dropping the other hides half of what went wrong.
+ */
+function foldReasons(reasons: readonly (string | undefined)[]): string | undefined {
+  const kept = reasons.filter(
+    (reason): reason is string => reason !== undefined && reason !== "verification_passed",
+  );
+  return kept.length === 0 ? undefined : kept.join("; ");
 }

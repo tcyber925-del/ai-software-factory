@@ -1,5 +1,5 @@
 import { mkdir, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentRef, RuntimeEvidence, RuntimeFailure, RuntimeHealth, WorkUnit, Worker, WorkerRuntime, WorkspaceRef } from "../../protocol.js";
 import type { CommandRunner } from "./process.js";
@@ -23,7 +23,11 @@ export interface OpenCodeRuntimeOptions { command?: string; workspaceRoot?: stri
 export class OpenCodeRuntime implements WorkerRuntime {
   readonly #command: string; readonly #workspaceRoot: string; readonly #repositoryRoot: string; readonly #runner: CommandRunner; readonly #promptTimeoutMs: number;
   readonly #workspaces = new Map<string, WorkspaceRef>(); readonly #workUnitIds = new Map<string, string>(); readonly #agents = new Map<string, OpenCodeAgentState>();
-  constructor(options: OpenCodeRuntimeOptions = {}) { this.#command = options.command ?? "opencode"; this.#workspaceRoot = options.workspaceRoot ?? join(".factory", "workspaces"); this.#repositoryRoot = options.repositoryRoot ?? process.cwd(); this.#runner = options.runner ?? defaultCommandRunner; this.#promptTimeoutMs = options.promptTimeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS; }
+  constructor(options: OpenCodeRuntimeOptions = {}) { this.#command = options.command ?? "opencode"; // Absolute, so the path a runtime is handed cannot resolve differently in the
+    // subprocess than it did in the pipeline. A relative path is correct only for
+    // as long as every consumer shares this process's working directory — and the
+    // whole point of a worktree is that the agent runs somewhere else.
+    this.#workspaceRoot = options.workspaceRoot ?? resolve(join(".factory", "workspaces")); this.#repositoryRoot = options.repositoryRoot ?? process.cwd(); this.#runner = options.runner ?? defaultCommandRunner; this.#promptTimeoutMs = options.promptTimeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS; }
   async capabilities(): Promise<string[]> { return ["coding", "frontend", "backend", "testing", "review"]; }
   async health(): Promise<RuntimeHealth> { try { await this.#runner.run(this.#command, ["--version"], this.#repositoryRoot); return { available: true, runtime: "opencode" }; } catch { return { available: false, runtime: "opencode" }; } }
   async createWorkspace(_workUnit: WorkUnit): Promise<WorkspaceRef> { const id = `opencode-ws-${randomUUID()}`; const path = join(this.#workspaceRoot, id); await mkdir(path, { recursive: true }); const workspace = { id, path }; this.#workspaces.set(id, workspace); this.#workUnitIds.set(id, _workUnit.id); return workspace; }
