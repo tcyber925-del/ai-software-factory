@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { runPipeline } from "../src/kernel/pipeline.js";
 import type { JsonSchema } from "../src/kernel/json-schema.js";
 import { validateAgainstSchema } from "../src/kernel/json-schema.js";
+import { checkScope } from "../src/kernel/scope.js";
 import { dispatch } from "../src/cli/index.js";
 import { readWorkUnitFile } from "../src/cli/args.js";
 import { FakeRuntime } from "../src/fake-runtime.js";
@@ -294,6 +295,19 @@ describe("an intake refusal reads as an intake refusal", () => {
 });
 
 describe("intake plans; it does not dispatch", () => {
+  it("offers no provider-specific execution command", async () => {
+    // Criterion 2, made explicit rather than left incidental. `work run` is the single
+    // execution boundary; if a provider could ever be dispatched under its own name,
+    // the next provider would arrive with its own execution path and every downstream
+    // guarantee about dispatch would have to be re-checked per provider.
+    for (const argv of [["linear", "run"], ["github", "run"], ["linear"], ["github"]]) {
+      const result = await run([...argv, "--source", "linear", "--records", GITHUB_FIXTURE, "--out", "plan.json"]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.lines[0]).toMatch(/unknown command/);
+    }
+  });
+
   it("says so, and names the separate command that runs the plan", async () => {
     const out = join(scratch("nodispatch"), "plan.json");
     const result = await run(githubArgs(out));
@@ -309,11 +323,16 @@ describe("intake plans; it does not dispatch", () => {
     // Structural evidence, beside the behavioural test above: a green run cannot see
     // a capability the module does not happen to call on this input. `node:fs` is the
     // one reach it is allowed, because writing the plan is the command's whole job.
+    //
+    // The adapter imports are asserted on the *narrow* modules, and that is the point:
+    // `src/adapters/linear/index.ts` re-exports `buildTransition` and `deriveOutcome`,
+    // which propose status changes. So a command importing the barrel would reach a
+    // `done` transition, and this list would name it as allowed.
     const source = readFileSync("src/cli/intake.ts", "utf8");
     const imports = [...source.matchAll(/^import\s[\s\S]*?from\s+"([^"]+)";/gm)].map((match) => match[1]!);
     expect([...new Set(imports)].sort()).toEqual([
-      "../adapters/github/index.js",
-      "../adapters/linear/index.js",
+      "../adapters/github/intake.js",
+      "../adapters/linear/intake.js",
       "../kernel/intake-plan.js",
       "../kernel/json-schema.js",
       "./args.js",
@@ -339,6 +358,46 @@ describe("intake plans; it does not dispatch", () => {
     ]) {
       expect(source, `the intake command must not reach ${forbidden}`).not.toContain(forbidden);
     }
+
+    // The barrels specifically, checked on the import statement rather than the whole
+    // file: a doc comment naming one is the module explaining itself, while an import
+    // of one is the capability.
+    expect(source).not.toMatch(/from\s+"[^"]*adapters\/(linear|github)\/index\.js"/);
+  });
+
+  it("reaches no status-transition capability even through the adapter barrels", async () => {
+    // Belt and braces on the same property: the Linear barrel genuinely does export
+    // the transition helpers, so the narrow imports above are load-bearing rather than
+    // stylistic. If a barrel ever stopped re-exporting them, the guard would have to be
+    // revisited, and this test is what says so.
+    const linear = await import("../src/adapters/linear/index.js");
+    const exported = Object.keys(linear).join(" ");
+
+    // The capability exists and is tested elsewhere — it is just not reachable here.
+    expect(exported).toContain("buildTransition");
+    expect(readFileSync("src/cli/intake.ts", "utf8")).not.toMatch(/from\s+"[^"]*linear\/index\.js"/);
+  });
+
+  it("declares no `paths`, so a plan it writes gets no scope gate", async () => {
+    // The consequence, not just the absence of a field. `checkScope` returns
+    // `undeclared` for a unit with no declared paths, and the pipeline's strictness
+    // follows `outOfScope`, which is empty — so a plan intake writes has no scope gate
+    // at all. That is correct behaviour (intake infers no write boundary from a
+    // record's content) and it is a fact an operator must know before dispatching such
+    // a plan, so it is asserted here and stated in `docs/cli.md`.
+    const out = join(scratch("scope"), "plan.json");
+    await run(githubArgs(out));
+
+    const changed = ["src/health/index.ts"];
+    expect(checkScope(changed, undefined)).toEqual({ changed, outOfScope: [], undeclared: true });
+    // The same change under a declared boundary is caught, which is what makes the
+    // absence meaningful rather than a broken check.
+    expect(checkScope(changed, ["src/slug"]).outOfScope.map((entry) => entry.file)).toEqual([
+      "src/health/index.ts",
+    ]);
+
+    // And nothing intake wrote claims otherwise.
+    for (const entry of writtenPlan(out)) expect(entry).not.toHaveProperty("paths");
   });
 
   it("leaves a real repository with nothing but the plan file behind", async () => {
@@ -485,6 +544,65 @@ describe("a mistake in the invocation is an error, not an empty plan", () => {
     });
   }
 
+  it("refuses a record whose url is not a url", async () => {
+    // `url` is the one optional field an adapter *calls a method on* — GitHub derives
+    // its link from the issue's coordinates and compares a recorded one with
+    // `startsWith`. Without a type check that throws from inside the provider with no
+    // path, no index and no field name, which is the stack trace this command exists
+    // to prevent. It also launders into the report: `IntakeSource.url` is a string, and
+    // a number would reach a consumer parsing `--json`.
+    const githubPath = join(scratch("bad-url-github"), "issues.json");
+    writeFileSync(githubPath, JSON.stringify([
+      { id: 900, owner: "acme", repo: "widgets", title: "t", state: "open", url: 42 },
+    ]));
+    const github = await run(["intake", "--source", "github", "--records", githubPath, "--out", "plan.json"]);
+
+    expect(github.exitCode).toBe(1);
+    expect(github.lines.join("\n")).toContain(`${githubPath}[0]: 'url' must be a string`);
+
+    const linearPath = join(scratch("bad-url-linear"), "issues.json");
+    writeFileSync(linearPath, JSON.stringify([
+      { id: "E-1", title: "t", statusType: "started", url: 9 },
+    ]));
+    const linear = await run(["intake", "--source", "linear", "--records", linearPath, "--out", "plan.json"]);
+
+    expect(linear.exitCode).toBe(1);
+    expect(linear.lines.join("\n")).toContain(`${linearPath}[0]: 'url' must be a string`);
+  });
+
+  it("refuses a GitHub state that is neither open nor closed", async () => {
+    // The adapter types `state` as `"open" | "closed"`. Validating it as any string let
+    // `"OPEN"` through, and the refusal then said "issue is closed and is never
+    // dispatchable" — a false statement about a record the provider never described.
+    // Failing safe is right; being confidently wrong is not.
+    const path = join(scratch("bad-state"), "issues.json");
+    writeFileSync(path, JSON.stringify([
+      { id: 900, owner: "acme", repo: "widgets", title: "t", state: "OPEN" },
+    ]));
+    const result = await run(["intake", "--source", "github", "--records", path, "--out", "plan.json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toContain(`${path}[0]: 'state' must be 'open' or 'closed'`);
+  });
+
+  it("refuses to write the plan over the records it read", async () => {
+    // `--out` equal to `--records` destroys the operator's only copy of the input, and
+    // a second run then reports "no work found" about a file that is now a plan. The
+    // command is otherwise careful about invocation mistakes; this is one.
+    const path = join(scratch("same-path"), "issues.json");
+    const original = JSON.stringify([
+      { id: 900, owner: "acme", repo: "widgets", title: "t", state: "open", labels: ["factory:eligible"],
+        body: "<!-- factory:start -->\n- capability: coding\n- acceptance: a\n<!-- factory:end -->" },
+    ]);
+    writeFileSync(path, original);
+
+    const result = await run(["intake", "--source", "github", "--records", path, "--out", path]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toMatch(/--out must differ from --records/);
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+
   it("refuses a records file that is not a list of records", async () => {
     const path = join(scratch("malformed"), "issues.json");
     writeFileSync(path, JSON.stringify({ issues: { not: "an array" } }));
@@ -598,6 +716,7 @@ describe("the documentation matches what shipped", () => {
       "docs/protocols.md",
       "docs/linear-adapter.md",
       "docs/github-intake.md",
+      "docs/using-the-factory.md",
       "README.md",
     ]) {
       const body = readFileSync(path, "utf8");
@@ -637,6 +756,35 @@ describe("the same inputs plan the same bytes, twice", () => {
     expect(readFileSync(first, "utf8")).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("preserves the record order the operator supplied", async () => {
+    // Determinism includes order, and the shipped fixtures cannot show it: every
+    // accepted id in them is already in id order, so a builder that sorted `units` by
+    // id would pass the whole suite. This is that missing case — records supplied
+    // newest-first, and the plan must come out newest-first.
+    const issues = (JSON.parse(readFileSync(GITHUB_FIXTURE, "utf8")) as { issues: Array<{ id: number }> }).issues;
+    // Issues 904 then 900 — both accepted, and deliberately in the opposite order to
+    // their ids.
+    const newestFirst = [issues.find((entry) => entry.id === 904), issues.find((entry) => entry.id === 900)];
+    const reversed = join(scratch("reversed"), "issues.json");
+    writeFileSync(reversed, JSON.stringify(newestFirst));
+    const out = join(scratch("reversed"), "plan.json");
+
+    const result = await run([
+      "intake", "--source", "github", "--records", reversed, "--out", out,
+      "--repository", "acme/widgets", "--eligible-label", "factory:eligible",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    // 904 before 900, because that is the order they were given in. Sorted, this would
+    // be the other way round — and an operator would have their reviewed order changed
+    // between runs without anything saying so.
+    expect(plannedIds(out)).toEqual(["acme/widgets#904", "acme/widgets#900"]);
+    expect(readWorkUnitFile(out).map((scheduled) => scheduled.workUnit.id)).toEqual([
+      "acme/widgets#904",
+      "acme/widgets#900",
+    ]);
+  });
+
   it("keeps a multi-source plan stable across both providers", async () => {
     // The brief's criterion is "multi-Work Unit intake is deterministic for the same
     // source inputs and policy config", so the check runs both providers and compares
@@ -662,16 +810,7 @@ describe("the same inputs plan the same bytes, twice", () => {
     expect(rounds[1]?.files).toEqual(rounds[0]?.files);
   });
 
-  it("orders planned units by the input order of the records", async () => {
-    // Determinism includes order. Sorting by id would make a plan stable while
-    // quietly reordering the work an operator reviewed.
-    const out = join(scratch("order"), "plan.json");
-    await run(githubArgs(out));
-
-    const parsed = readWorkUnitFile(out).map((scheduled) => scheduled.workUnit.id);
-    expect(parsed).toEqual(["acme/widgets#900", "acme/widgets#904"]);
-    expect([...parsed]).toEqual([...parsed].sort());
-  });
+  
 
   it("overwrites an existing plan rather than appending to it", async () => {
     const out = join(scratch("overwrite"), "plan.json");

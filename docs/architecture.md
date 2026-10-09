@@ -32,8 +32,8 @@ Approved specification
         ↓
 Work Unit  (declarative; capabilities, not providers)
         ↓
-Eligibility  (intake boundary — provider policy, explicit allowlist)   ← composed: `factory intake`
-                                                                          writes a plan, dispatches nothing
+Eligibility  (intake boundary — provider policy, explicit allowlist)   ← plans: `factory intake`
+                                                                          writes a file, dispatches nothing
         ↓
 Security gate  (risk class → required isolation)                      ← composed, before dispatch
         ↓
@@ -64,10 +64,11 @@ PR / human review                                                      ← human
 Release / observe / learn                                              ← human-led
 ```
 
-The annotations matter. Every box marked *composed*, *human-led*, or *writes a plan* is shipped, documented and
-reachable; *composed* means `src/kernel/pipeline.ts` calls it, and *human-led* means it needs a person.
-Eligibility is the one box that is reachable but sits **before** the pipeline: `factory intake` composes it into a
-plan file, and dispatching that plan is the separate `factory work run`. See [cli.md](cli.md).
+The annotations matter. Every box is shipped, documented and reachable; they differ in *who*
+reaches it. *composed* means `src/kernel/pipeline.ts` calls it, *human-led* means a person
+does, and *plans* means the `factory intake` command calls it to produce a file. Eligibility
+is the one box outside the pipeline: `factory intake` plans from it, and dispatching that
+plan is the separate `factory work run`. See [cli.md](cli.md).
 
 The security gate runs **before** anything is dispatched — before a workspace, before a worktree,
 before a runtime is invoked — so a refusal has no aftermath to clean up. Each decision is persisted as

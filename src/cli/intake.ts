@@ -1,8 +1,14 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import type { GitHubIssue, GitHubIntakePolicy } from "../adapters/github/index.js";
-import { githubIntakeAdapter } from "../adapters/github/index.js";
-import type { LinearIntakePolicy, LinearIssue } from "../adapters/linear/index.js";
-import { linearIntakeAdapter } from "../adapters/linear/index.js";
+// Imported from the adapter modules rather than their barrels on purpose. A barrel is
+// convenient right up until it re-exports something this command must not be able to
+// reach: the Linear barrel also exports `buildTransition` and `deriveOutcome`, which
+// propose status changes. Importing the narrow module is what makes "this command cannot
+// propose a transition" an import-list fact rather than a promise, and it keeps the test
+// that checks that list honest.
+import type { GitHubIssue, GitHubIntakePolicy } from "../adapters/github/intake.js";
+import { githubIntakeAdapter } from "../adapters/github/intake.js";
+import type { LinearIntakePolicy, LinearIssue } from "../adapters/linear/intake.js";
+import { linearIntakeAdapter } from "../adapters/linear/intake.js";
 import { isRecord } from "../kernel/json-schema.js";
 import type { IntakePlan } from "../kernel/intake-plan.js";
 import { buildIntakePlan } from "../kernel/intake-plan.js";
@@ -113,14 +119,34 @@ function requireFlag(args: ParsedArgs, name: string): string {
  * so by name. A record that cannot be read at all is a different failure: without this,
  * a `labels` field that is a string instead of a list throws from inside the provider's
  * rule, and an operator gets a stack trace for a typo in a file they wrote.
+ *
+ * `url` earns a place here for a reason the others do not: it is the one optional field
+ * an adapter *calls a method on*. GitHub compares a recorded link with `startsWith`
+ * before it has decided anything, so a number where a string belongs throws from inside
+ * the provider — and, having got that far, would also launder into the machine-readable
+ * report, where `IntakeSource.url` promises a string.
  */
 const REQUIRED_FIELDS: Record<IntakeSourceName, Array<[string, "string" | "number"]>> = {
   linear: [["id", "string"], ["title", "string"], ["statusType", "string"]],
   github: [["id", "number"], ["owner", "string"], ["repo", "string"], ["title", "string"], ["state", "string"]],
 };
 
-/** `blockedBy` and `labels` are optional; present but wrongly typed is a malformed file. */
+/**
+ * GitHub's taxonomy offers exactly these two states, and a value outside them is a
+ * malformed file rather than an ineligible record.
+ *
+ * Checked as a value set, not just a type, because the adapter's refusal for a
+ * non-`open` state says "issue is closed and is never dispatchable" — which, for
+ * `"OPEN"`, is a confident false statement about a record the provider never described.
+ * Failing safe is right; being confidently wrong is not.
+ */
+const STATE_VALUES: Partial<Record<IntakeSourceName, Record<string, readonly string[]>>> = {
+  github: { state: ["open", "closed"] },
+};
+
+/** `blockedBy`, `labels` and `url` are optional; present but wrongly typed is malformed. */
 const OPTIONAL_LIST_FIELDS = ["labels", "blockedBy"] as const;
+const OPTIONAL_STRING_FIELDS = ["url"] as const;
 
 function validateRecords(source: IntakeSourceName, path: string, records: Record<string, unknown>[]): void {
   records.forEach((record, index) => {
@@ -129,11 +155,25 @@ function validateRecords(source: IntakeSourceName, path: string, records: Record
         throw new Error(`${path}[${index}]: '${field}' must be a ${type} (received ${typeof record[field]})`);
       }
     }
+    for (const [field, allowed] of Object.entries(STATE_VALUES[source] ?? {})) {
+      const value = record[field];
+      if (typeof value === "string" && (allowed as readonly string[]).includes(value) === false) {
+        const permitted = (allowed as readonly string[]).map((entry) => `'${entry}'`).join(" or ");
+        throw new Error(`${path}[${index}]: '${field}' must be ${permitted}`);
+      }
+    }
     for (const field of OPTIONAL_LIST_FIELDS) {
       const value = record[field];
       if (value === undefined) continue;
       if (Array.isArray(value) === false || value.some((entry) => typeof entry !== "string")) {
         throw new Error(`${path}[${index}]: '${field}' must be an array of strings`);
+      }
+    }
+    for (const field of OPTIONAL_STRING_FIELDS) {
+      const value = record[field];
+      if (value === undefined) continue;
+      if (typeof value !== "string") {
+        throw new Error(`${path}[${index}]: '${field}' must be a string (received ${typeof value})`);
       }
     }
   });
@@ -231,6 +271,10 @@ export function intakeCommand(args: ParsedArgs): CommandOutput {
 
   const recordsPath = requireFlag(args, "records");
   const outPath = requireFlag(args, "out");
+  // Writing the plan over the records would destroy the operator's only copy of the
+  // input, and a second run would then report "no work found" about a file that is now
+  // a plan. Cheap to refuse, and the mistake is not obvious from the command line.
+  if (outPath === recordsPath) throw new Error("--out must differ from --records");
   const records = readRecords(recordsPath);
   validateRecords(source, recordsPath, records);
   const plan = planFor(source, args, records);
@@ -295,12 +339,22 @@ function render(source: IntakeSourceName, recordCount: number, outPath: string, 
   return lines;
 }
 
-/** Provider-specific help, kept beside the command so the two cannot drift apart. */
-export const INTAKE_USAGE = [
+/**
+ * The command's own help, which `USAGE` splices in rather than restating.
+ *
+ * One copy, because a second is how a flag ends up documented in `--help` but not
+ * validated, or validated but not documented. `PROVIDER_FLAGS` is the same constant the
+ * command validates against, so a provider-specific flag cannot be added without
+ * appearing here.
+ */
+export const INTAKE_USAGE: string[] = [
   "  factory intake --source <linear|github> --records <issues.json> --out <plan.json>",
-  "        [--repository <owner/name>] [--eligible-status <list>] [--eligible-status-name <list>]",
-  "        [--eligible-label <list>] [--blocking-label <list>] [--json]",
+  "                        [--repository <owner/name>] [--blocking-label <list>] [--json]",
+  "         linear only:  [--eligible-status <list>] [--eligible-status-name <list>]",
+  "        github only:   [--eligible-label <list>]",
   "",
+  "  Compiles provider records into a plan file. It never dispatches:",
+  "  running the plan it writes is the separate, human-initiated `work run`.",
   "  --source <name>        Task provider to intake from: linear or github",
   "  --records <path>       Provider records: a JSON array, or { \"issues\": [...] }",
   "  --out <path>           Where to write the plan `work run --work-units` reads",
@@ -309,4 +363,4 @@ export const INTAKE_USAGE = [
   "  --eligible-status-name <list>  Linear: status names cleared for dispatch (default: none)",
   "  --eligible-label <list>        GitHub: labels cleared for dispatch (default: none)",
   "  --blocking-label <list>        Refuse records carrying these labels",
-].join("\n");
+];

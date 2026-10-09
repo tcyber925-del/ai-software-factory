@@ -167,7 +167,10 @@ what it does there. No `factory` command emits `integration.status_proposed` or 
 acknowledgement the CLI has no business supplying.
 
 `buildLinearIntakePlan` remains the composable seam for a caller that wants the plan in
-process rather than on disk.
+process rather than on disk, and the `extras` it accepts remain the way to supply `paths`,
+`dependsOn`, `contracts` or `risk`. `factory intake` supplies none, because a Linear issue
+states no write boundary: a plan it writes has no scope gate, so add `paths` before
+running one.
 
 The command does not dispatch, and the composition is visible in the output: the last line
 names the separate `factory work run --work-units <plan>` step. That answers the question

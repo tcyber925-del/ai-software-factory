@@ -6,6 +6,11 @@ import { workUnitFromWireForm } from "../kernel/work-unit.js";
 import type { ExecutionRiskInput } from "../security/risk.js";
 import type { ShellCheckSpec, ShellRunner } from "../adapters/verification/shell.js";
 import type { EventLog } from "../state/event-log.js";
+// The intake command owns its own flag list rather than having it restated here: a
+// second copy is how a flag ends up validated but undocumented, or documented but not
+// validated. `INTAKE_USAGE` is a value, and this module's import of `intake.ts` is
+// therefore erased at emit, so the two do not form a cycle at runtime.
+import { INTAKE_USAGE } from "./intake.js";
 
 /**
  * Minimal command-line surface.
@@ -72,20 +77,10 @@ export const USAGE = [
   "Usage:",
   "  factory work run       --work-units <plan.json> [--runtime <name>]",
   "  factory work validate  --work-units <plan.json>",
-  "  factory intake         --source <linear|github> --records <issues.json> --out <plan.json>",
   "  factory verify",
   "  factory doctor",
   "",
-  "Intake compiles provider records into a plan file. It never dispatches:",
-  "running the plan it writes is the separate, human-initiated `work run` above.",
-  "  --source <name>        Task provider to intake from: linear or github",
-  "  --records <path>       Provider records: a JSON array, or { \"issues\": [...] }",
-  "  --out <path>           Where to write the plan `work run --work-units` reads",
-  "  --repository <name>    Target repository for compiled work; never inferred",
-  "  --eligible-status <list>       Linear: status types cleared for dispatch (default: none)",
-  "  --eligible-status-name <list>  Linear: status names cleared for dispatch (default: none)",
-  "  --eligible-label <list>        GitHub: labels cleared for dispatch (default: none)",
-  "  --blocking-label <list>        Refuse records carrying these labels",
+  ...INTAKE_USAGE,
   "",
   "Flags:",
   "  --work-units <path>   Plan: array of { workUnit, dependsOn?, paths?, contracts? }",

@@ -188,7 +188,8 @@ the offline fixtures already cover both the accepted and every refused path.
 issues through this adapter and writes a plan file. It calls
 `evaluateGitHubEligibility` and nothing else: no issue is written, no label applied, no
 transition proposed, and no work dispatched — the last line of its output names the separate
-`factory work run` step.
+`factory work run` step. It writes no `paths` either, so a plan it produces has no scope
+gate; add them before running one.
 
 `--eligible-label` **sets** the allowlist, which is the human decision the default-empty rule
 exists to require. There is no flag that bypasses it, so a CLI operator cannot point this at a

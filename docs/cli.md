@@ -66,7 +66,7 @@ intake: github — 2 accepted, 8 refused (10 record(s))
 plan written: plan.json
 intake accepted acme/widgets#900 (github)
 intake accepted acme/widgets#904 (github)
-intake refused tcyber925-del/ai-software-factory#60 (github): not_allowlisted ...
+intake refused owner/repository#60 (github): not_allowlisted ...
 intake refused acme/widgets#901 (github): not_allowlisted eligibility_label_not_allowlisted ...
 ...
 nothing was dispatched; review the plan, then run: factory work run --work-units plan.json
@@ -226,15 +226,23 @@ calls no part of the pipeline and dispatches nothing.
 
 | Capability | Module | Who applies it |
 | --- | --- | --- |
-| Linear and GitHub intake | `src/adapters/linear/`, `src/adapters/github/` | `factory intake`, which writes a plan. Running it is a separate `factory work run` |
+| Linear and GitHub intake | `src/adapters/linear/`, `src/adapters/github/` | `factory intake`, which writes a plan. Running it is a separate `factory work run`. It declares no `paths`, so such a plan gets no scope gate |
 | Linear status reflection | `src/adapters/linear/status.ts` | The caller. No CLI command proposes a status transition |
 
 The security gate **is** composed into dispatch. It runs before dispatch and refuses
 `untrusted` and `destructive` work, because no adapter offers the `sandbox`
 isolation those classes require. Risk signals are declared on the plan, never
 inferred from the goal text — see [security-policy.md](security-policy.md). Intake
-infers none either, which is why an accepted Work Unit still faces every downstream
-gate.
+infers none either, so an accepted Work Unit still faces the security gate, the
+scheduler, independent verification and the integration gate.
+
+**The scope gate is the exception, and a plan from `factory intake` gets none.** Intake
+declares no `paths`, so `checkScope` reports `undeclared` and the pipeline's scope
+strictness follows an empty `outOfScope` — there is no gate to fail. That is the correct
+consequence of refusing to infer a write boundary from an issue's content, but it means
+`factory work run --work-units plan.json` alone is **not** the scope-checked run. Add
+`paths` to the plan entries before running one; see
+[Scope enforcement](#scope-enforcement) for the outcomes.
 
 The scheduler's refusal in the pipeline is a different thing entirely: `runPipeline`
 reads `planSchedule` decisions, so it reports a Work Unit the *scheduler* refused — an

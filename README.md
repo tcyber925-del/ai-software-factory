@@ -280,8 +280,8 @@ shipped code.
 | Verification defaults to `npm test` | A project verifying another way passes `--checks <file.json>`; an empty list is refused |
 | Security risk signals are declared, not detected | The gate refuses `untrusted`/`destructive` work, but only from signals declared on the plan. It does not read the goal text to guess |
 | Scope is enforced, not advisory | An out-of-scope change blocks `ready`. A Work Unit declaring no `paths` gets no gate, recorded as `undeclared`. An audit and a gate, **not a sandbox** |
-| Intake is composed but does not dispatch | `factory intake` plans from Linear and GitHub issues into a plan file; running it is a separate `factory work run`. Linear status reflection and live provider fetch stay library-only |
-| CLI surface is narrower than the plan | Implemented: `work run`, `work validate`, `verify`, `doctor`. Not implemented: `init`, `work create`, `work status`, `workspace list` |
+| Intake is composed but does not dispatch | `factory intake` plans from Linear and GitHub issues into a plan file; running it is a separate `factory work run`. It declares no `paths`, so such a plan carries no scope gate. Linear status reflection and live provider fetch stay library-only |
+| CLI surface is narrower than the plan | Implemented: `work run`, `work validate`, `intake`, `verify`, `doctor`. Not implemented: `init`, `work create`, `work status`, `workspace list` |
 | No SCM adapter | PR creation and merge stay human-led; the factory records the decision only |
 | No sandbox adapter | Nothing offers `sandbox` isolation, so `untrusted` and `destructive` work is **refused** at dispatch rather than run weakly |
 | Adapters organised by provider | `src/adapters/{opencode,herdr,hermes,linear,verification}` rather than the plan's role-based directories |
