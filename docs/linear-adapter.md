@@ -104,18 +104,97 @@ covered when they are not:
   the missing block.
 - **ENG-905** — eligible status with a blocking label, proving labels are honoured.
 
-## Not reachable from the CLI
+## Behind the provider-neutral intake boundary
 
-This adapter is a library. No `factory` command reads Linear, calls `evaluateEligibility`, or emits
-`integration.status_proposed`. A caller assembles the flow.
+`src/kernel/intake.ts` defines the contract every task provider implements. This adapter is its
+first consumer: `linearIntakeAdapter` in `src/adapters/linear/intake.ts` is a
+`ProviderIntakeAdapter<LinearIssue, LinearIntakePolicy>`.
 
-The `scheduler blocked` message the pipeline can print is a different thing entirely: `runPipeline`
-reads `planSchedule` decisions, so it is reporting a Work Unit the *scheduler* blocked — an
-unsatisfied dependency, a missing capability, a cycle — not an issue Linear refused. Conflating the
-two would imply an intake path that does not exist.
+It is a **binding, not a second implementation**. `evaluate` delegates to `evaluateEligibility` and
+`compile` delegates to `compileWorkUnit`, so every rule above is reached exactly as it was written
+and none can be softened by being re-expressed for the boundary. A test asserts the two paths
+produce the identical Work Unit, which is what keeps them from drifting apart. The only new logic is
+`LINEAR_REFUSAL_CLASSIFICATIONS`, a `Record<RefusalReason, IntakeRefusalClassification>` mapping each
+Linear reason onto the boundary's coarse vocabulary — `not_dispatchable`, `not_allowlisted`,
+`policy_blocked`, `dependency_incomplete`, `dependency_unresolved`, `requirements_undeclared`,
+`target_undeclared`. Because the record type is exhaustive, adding a refusal reason to this adapter
+fails `npm run build` until it is classified, rather than degrading to a silent default.
 
-`fixtures/linear/` holds recorded payloads so the rules are tested offline, but nothing in `src/cli/`
-reads them.
+Summarising loses nothing: the Linear reason code travels alongside as `providerReason`, `check`
+names which check decided, and `detail` reaches the operator intact. Linear identity — provider,
+issue id, url — lands on `result.source`, beside the Work Unit. The compiled unit carries exactly the
+protocol's own fields, so nothing provider-specific is portable-blocked into `work-unit.schema.json`.
+
+## Intake produces a plan; it does not dispatch
+
+`buildLinearIntakePlan({ issues, policy, extras })` in `src/adapters/linear/plan.ts` runs a set of
+issues through the boundary and returns `{ units, refusals }`.
+
+`units` is a plan file, in the shape `readWorkUnitFile` in `src/cli/args.ts` already parses:
+
+```json
+[{ "workUnit": { "id": "ENG-902", "goal": "…", "repository": "acme/widgets" } }]
+```
+
+Each entry is `{ workUnit, dependsOn?, paths?, contracts?, runtimes?, protectedResources?, risk? }`.
+A test writes the output to disk and reads it back through that real reader, so if the plan shape ever
+drifts from what `factory work run --work-units` accepts, the read throws rather than the plan
+quietly becoming unusable.
+
+`refusals` holds what was *not* planned, each naming the issue and why. Refused issues never appear
+as units: a refusal is about a provider record, and a refused record never became a Work Unit to
+plan. Having both lists is the point — an operator does not re-run intake to discover what was
+excluded.
+
+Three properties are structural rather than promised:
+
+- **It cannot dispatch.** This module returns a document. There is no runtime, worktree or call into
+  `runPipeline` on this path, so composing intake cannot start work.
+- **No scheduling structure is inferred.** `blockedBy` gated eligibility, but an accepted issue's
+  blockers are finished by definition — turning that relation into a plan `dependsOn` would ask the
+  scheduler for work already done. `dependsOn`, `paths`, `contracts` and `risk` are whatever the
+  caller passed in `extras`, copied verbatim. `risk` especially: it is a control the security gate
+  enforces, so inferring it from the goal string would be a guess dressed as a gate.
+- **It is reproducible.** Same issues and policy, identical plan, input order, no clock. A plan is a
+  document a human approves before work runs, so re-running intake must not rewrite what was agreed.
+
+## Composed into the CLI as planning
+
+This adapter is reachable: `factory intake --source linear --records <issues.json> --out
+<plan.json>` runs issues through the boundary and writes a plan file. That is the whole of
+what it does there. No `factory` command emits `integration.status_proposed` or calls
+`deriveOutcome` — status reflection stays a library path, because a transition needs a human
+acknowledgement the CLI has no business supplying.
+
+`buildLinearIntakePlan` remains the composable seam for a caller that wants the plan in
+process rather than on disk, and the `extras` it accepts remain the way to supply `paths`,
+`dependsOn`, `contracts` or `risk`. `factory intake` supplies none, because a Linear issue
+states no write boundary: a plan it writes has no scope gate, so add `paths` before
+running one.
+
+The command does not dispatch, and the composition is visible in the output: the last line
+names the separate `factory work run --work-units <plan>` step. That answers the question
+FCT-018 deferred — intake writes a plan, and a human runs it — rather than piping straight
+into dispatch.
+
+The eligibility allowlist is still empty by default, and the CLI adds no flag around it.
+`--eligible-status` and `--eligible-status-name` *set* it; nothing overrides it.
+
+The `scheduler blocked` message the pipeline can print is a different thing entirely:
+`runPipeline` reads `planSchedule` decisions, so it is reporting a Work Unit the *scheduler*
+blocked — an unsatisfied dependency, a missing capability, a cycle — not an issue Linear
+refused.
+
+That distinction is carried in the types rather than left to prose. An `IntakeResult` and an
+`IntakePlanRefusal` are identified by `source.provider` + `source.reference` and carry **no**
+`workUnitId` field — the key a `SchedulingDecision` uses. Their vocabularies are disjoint
+(`accepted`/`refused` against `scheduled`/`blocked`), and every refusal line is rendered by the
+kernel's `describeIntakeOutcome`, which prefixes `intake` and names the provider and record. A
+consumer therefore cannot report an intake refusal against a Work Unit that does not exist.
+
+`fixtures/linear/` holds recorded payloads so the rules are tested offline. `factory intake`
+reads them the same way it reads any records file: a local path, no network call, and no
+credential. `buildLinearIntakePlan` plans the identical result in process.
 
 ## Boundary
 

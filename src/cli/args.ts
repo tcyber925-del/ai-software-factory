@@ -6,6 +6,11 @@ import { workUnitFromWireForm } from "../kernel/work-unit.js";
 import type { ExecutionRiskInput } from "../security/risk.js";
 import type { ShellCheckSpec, ShellRunner } from "../adapters/verification/shell.js";
 import type { EventLog } from "../state/event-log.js";
+// The intake command owns its own flag list rather than having it restated here: a
+// second copy is how a flag ends up validated but undocumented, or documented but not
+// validated. `INTAKE_USAGE` is a value, and this module's import of `intake.ts` is
+// therefore erased at emit, so the two do not form a cycle at runtime.
+import { INTAKE_USAGE } from "./intake.js";
 
 /**
  * Minimal command-line surface.
@@ -74,6 +79,8 @@ export const USAGE = [
   "  factory work validate  --work-units <plan.json>",
   "  factory verify",
   "  factory doctor",
+  "",
+  ...INTAKE_USAGE,
   "",
   "Flags:",
   "  --work-units <path>   Plan: array of { workUnit, dependsOn?, paths?, contracts? }",

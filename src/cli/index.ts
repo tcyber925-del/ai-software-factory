@@ -20,6 +20,7 @@ import type { ShellCheckSpec } from "../adapters/verification/shell.js";
 import type { ScheduledWorkUnit } from "../kernel/scheduler.js";
 import type { CliDependencies, CommandOutput, ParsedArgs } from "./args.js";
 import { USAGE, parseArgs, readChecksFile, readWorkUnitFile, selectRuntimes } from "./args.js";
+import { intakeCommand } from "./intake.js";
 
 /**
  * Command dispatch.
@@ -116,6 +117,10 @@ export async function dispatch(argv: string[], context: RunContext): Promise<Com
         return await workRun(args, context);
       case "work validate":
         return workValidate(args, context);
+      // Intake sits before the pipeline and writes a plan; it never reaches it. See
+      // `src/cli/intake.ts` for why the two steps stay separate commands.
+      case "intake":
+        return intakeCommand(args);
       case "verify":
         return await factoryVerify(context);
       case "doctor":
