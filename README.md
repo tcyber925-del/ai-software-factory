@@ -245,6 +245,7 @@ committed artifact; a clean clone starts with no trace.
 | [docs/hermes-adapter.md](docs/hermes-adapter.md) | Hermes as an optional runtime, not an authority |
 | [docs/linear-adapter.md](docs/linear-adapter.md) | Linear intake and status reflection |
 | [docs/github-intake.md](docs/github-intake.md) | GitHub Issues intake |
+| [docs/decisions/README.md](docs/decisions/README.md) | Decision records: choices that are judgements, not consequences |
 | [docs/security.md](docs/security.md) | Threat posture and defaults |
 | [docs/security-policy.md](docs/security-policy.md) | Risk classification and the isolation gate |
 | [docs/verification-and-merge-gates.md](docs/verification-and-merge-gates.md) | Verification and merge-gate policy |

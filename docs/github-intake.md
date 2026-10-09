@@ -13,6 +13,11 @@ the first provider is [linear-adapter.md](linear-adapter.md), and the boundary b
 
 ## The eligibility signal, and why it is a label
 
+> **Recorded as a decision.** The choice of a label over a state is not a consequence of the code —
+> it is a judgement, and it was ratified rather than inferred. See
+> [decisions/0001-github-intake-eligibility.md](decisions/0001-github-intake-eligibility.md) for the
+> alternatives that were considered and rejected, and who ratified it.
+
 GitHub's issue taxonomy offers exactly two states — `open` and `closed` — plus a close reason. It
 has **no "Ready" status at all**. That is the same situation the Linear workspace is in, and it has
 the same consequence: eligibility cannot be inferred from a status name, because there isn't one
