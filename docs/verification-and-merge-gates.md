@@ -126,8 +126,8 @@ advisory for the only person who can merge.
 
 `npm run verify` is the local equivalent: `tsc --noEmit`, a CLI emit, and the full test suite.
 
-`factory verify` is **not** the same gate and does not currently pass — it invokes `format:check`,
-`lint`, and `typecheck`, none of which this repository defines. See [cli.md](cli.md).
+`factory verify` is the same contract reached a different way: it reads this
+repository's `package.json`, finds `verify`, and runs it. See [cli.md](cli.md).
 
 ## The gate is a floor, not a ceiling
 

@@ -134,28 +134,41 @@ source never mentions `process.env`. That is why CI needs no provider auth, and 
 the honest reading of "live access, if it ever exists, is explicit opt-in": the offline
 fixtures already cover the accepted path and every refused one.
 
-### `factory verify` is currently non-functional
+### `factory verify` runs the project's own checks
 
-`factory verify` shells out to `npm run` for `format:check`, `lint`, `typecheck`,
-`test`, and `build`, in that order, stopping at the first failure. This repository
-defines only `build`, `build:cli`, `factory`, `test`, and `verify` — so
-`format:check` is missing and the command exits `1` before doing any work.
+`factory verify` reads the target project's `package.json` rather than assuming a
+fixed list. When that project declares a `verify` script it runs **that script alone** —
+it is the project's aggregate contract, exactly as its CI sees it, and running the
+individual steps as well would execute the suite twice. In other words it runs the
+target project's own `verify` script, so on a repository that declares one the two
+are equivalent.
 
 ```
 $ node dist/bin.js verify
-fail  npm run format:check
-$ echo $?
-1
+ok    npm run verify
+verification passed (1 step).
 ```
 
-There is no formatter, linter, or separate `typecheck` script in this repository;
-`npm run build` is the typecheck. `npm run verify` is the working equivalent. The
-gap is recorded rather than papered over by adding empty scripts that would report
-a green run without checking anything.
+This repository declares `verify`, so the command runs the repository's own gate.
+The earlier implementation invoked a hard-coded list including `format:check`, `lint`,
+and `typecheck` — none of which this repository defines — so the command failed on a
+factory that was itself green. A verification command the project does not recognise
+can only ever fail, and a command that cannot pass is indistinguishable from one that
+found a problem.
 
-The command is kept because it is the intended shape — a project-level verification
-entry point that an adopting repository fills in with its own `format:check`,
-`lint`, and `typecheck`. `docs/adoption.md` says which scripts an adopter must add.
+Three properties follow, each of them a failure rather than a pass:
+
+- A project declaring **no** recognised step fails. "Nothing was verified" must never be
+  reported as "verification passed".
+- A project with **no readable** `package.json` fails, for the same reason.
+- A declared step that **exits non-zero** fails, and the command stops there.
+
+When a project declares some steps but not others, the ones it omits are reported as
+`skip`, never silently passed over.
+
+An adopting project that wants formatting and lint signals declares `format:check` and
+`lint` in its own `package.json`; the factory picks them up without configuration.
+Treat them as real signals, not placeholders. See [adoption.md](adoption.md).
 
 ## The pipeline
 
@@ -368,8 +381,9 @@ framework is not worth breaking that for.
 | `npm run verify` | build, build:cli, test |
 
 Note that `npm run verify` and `factory verify` are different things: the first is
-the repository's own gate, the second shells out to per-project scripts and does not
-currently pass here.
+the repository's own gate, the second reads the target project's `package.json` and
+runs the checks that project declares. Here they happen to coincide, because this
+repository's `verify` script is its gate.
 
 The repository typechecks with `noEmit`, so a runnable CLI needs a real emit
 target. `tsconfig.build.json` provides one for `src/` and excludes `tests/`.

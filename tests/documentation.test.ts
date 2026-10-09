@@ -314,11 +314,67 @@ describe("documentation cannot rot into inaccuracy", () => {
   it("does not claim factory verify is broken", () => {
     // Fixed when it learned to read the project's own scripts. The stale claim
     // outlived the bug by several merges.
+    //
+    // The first version of this guard matched two literal phrasings, neither of
+    // which any document used — so it passed vacuously while the claim sat in
+    // two docs for several merges. A staleness guard is a control only if it
+    // fails on the real wording, so these patterns are asserted against the
+    // sentence that actually shipped, below, before they are trusted.
+    const stale = [
+      /factory verify`? is (?:currently )?non-functional/i,
+      /factory verify`? is \*\*not\*\* the same gate and does not currently pass/i,
+      /`?factory verify`? (?:shells out to|invokes) `?(?:npm run )?(?:five )?(?:format:check|`npm run`)/i,
+      /`?npm run verify`? is the working equivalent/i,
+      /`?factory verify`? is not\b/i,
+    ];
     for (const path of ALL_DOCS) {
-      expect(read(path), `${path} still says factory verify is unusable`).not.toMatch(
-        /factory verify` is \*\*not currently usable|verify` is unusable/i,
-      );
+      for (const pattern of stale) {
+        expect(read(path), `${path} still says factory verify is unusable (${pattern})`).not.toMatch(pattern);
+      }
     }
+  });
+
+  it("the factory-verify staleness guard fails on the claim it was written for", () => {
+    // A guard that matches nothing is worse than no guard: it reads as evidence
+    // in review while checking nothing. The sentences below are the ones that
+    // shipped in docs/cli.md and docs/verification-and-merge-gates.md. If a
+    // future edit weakens a pattern, this fails instead of the guard going
+    // quietly vacuous a second time.
+    const shipped = [
+      "### `factory verify` is currently non-functional",
+      "`factory verify` shells out to `npm run` for `format:check`, `lint`, `typecheck`,",
+      "`npm run verify` is the working equivalent.",
+      "`factory verify` is **not** the same gate and does not currently pass",
+      "which is why `npm run verify` is the working equivalent there and `factory verify` is not",
+    ];
+    const stale = [
+      /factory verify`? is (?:currently )?non-functional/i,
+      /factory verify`? is \*\*not\*\* the same gate and does not currently pass/i,
+      /`?factory verify`? (?:shells out to|invokes) `?(?:npm run )?(?:five )?(?:format:check|`npm run`)/i,
+      /`?npm run verify`? is the working equivalent/i,
+      /`?factory verify`? is not\b/i,
+    ];
+    for (const sentence of shipped) {
+      expect(stale.some((pattern) => pattern.test(sentence)), `the guard no longer catches: ${sentence}`).toBe(true);
+    }
+  });
+
+  it("documents factory verify the way it actually behaves", () => {
+    // The behaviour, asserted against the shipped command rather than a comment:
+    // `factory verify` reads the target project's own `verify` script and runs
+    // it alone. A doc claiming otherwise sends a reader to debug a bug that was
+    // fixed, and — worse — teaches them that verification is unavailable.
+    // Prose is hard-wrapped, so a phrase can straddle a newline. Matching the raw
+    // text would couple the assertion to the wrapping, and a later re-wrap would
+    // fail the suite for no real reason. Collapse whitespace first.
+    const flat = (text: string): string => text.replace(/\s+/g, " ");
+    const docs = flat(read("docs/cli.md"));
+    expect(docs, "docs/cli.md must not claim the command is non-functional").not.toMatch(
+      /factory verify` is currently non-functional/i,
+    );
+    expect(docs, "docs/cli.md must state that it runs the project's own verify script").toMatch(
+      /runs the (?:target )?project'?s own `?verify`? script/i,
+    );
   });
 
   it("names the release somewhere a reader will find it", () => {
