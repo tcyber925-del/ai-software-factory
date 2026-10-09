@@ -40,6 +40,32 @@ const REQUIRED_DOCS = [
 
 const ALL_DOCS = [...REQUIRED_DOCS];
 
+/**
+ * Wording that used to tell readers `factory verify` was unusable.
+ *
+ * Declared once and used twice: once to keep the documents free of it, and once to
+ * prove the patterns still match the sentences they were written for. The first
+ * version of this guard listed its patterns inline and matched only phrasings no
+ * document used, so it passed while the claim sat in two docs. Keeping the list in
+ * one place is what stops the two uses drifting apart again.
+ */
+const STALE_VERIFY_CLAIMS = [
+  /factory verify`? is (?:currently )?non-functional/i,
+  /factory verify`? is \*\*not\*\* the same gate and does not currently pass/i,
+  /`?factory verify`? (?:shells out to|invokes) `?(?:npm run )?(?:five )?(?:format:check|`npm run`)/i,
+  /`?npm run verify`? is the working equivalent/i,
+  /`?factory verify`? is not\b/i,
+];
+
+/** The sentences that actually shipped, used to keep the patterns honest. */
+const VERIFY_CLAIMS_THAT_SHIPPED = [
+  "### `factory verify` is currently non-functional",
+  "`factory verify` shells out to `npm run` for `format:check`, `lint`, `typecheck`,",
+  "`npm run verify` is the working equivalent.",
+  "`factory verify` is **not** the same gate and does not currently pass",
+  "which is why `npm run verify` is the working equivalent there and `factory verify` is not",
+];
+
 describe("the documentation set is complete and indexed", () => {
   it("every required document exists", () => {
     for (const path of REQUIRED_DOCS) {
@@ -314,21 +340,8 @@ describe("documentation cannot rot into inaccuracy", () => {
   it("does not claim factory verify is broken", () => {
     // Fixed when it learned to read the project's own scripts. The stale claim
     // outlived the bug by several merges.
-    //
-    // The first version of this guard matched two literal phrasings, neither of
-    // which any document used — so it passed vacuously while the claim sat in
-    // two docs for several merges. A staleness guard is a control only if it
-    // fails on the real wording, so these patterns are asserted against the
-    // sentence that actually shipped, below, before they are trusted.
-    const stale = [
-      /factory verify`? is (?:currently )?non-functional/i,
-      /factory verify`? is \*\*not\*\* the same gate and does not currently pass/i,
-      /`?factory verify`? (?:shells out to|invokes) `?(?:npm run )?(?:five )?(?:format:check|`npm run`)/i,
-      /`?npm run verify`? is the working equivalent/i,
-      /`?factory verify`? is not\b/i,
-    ];
     for (const path of ALL_DOCS) {
-      for (const pattern of stale) {
+      for (const pattern of STALE_VERIFY_CLAIMS) {
         expect(read(path), `${path} still says factory verify is unusable (${pattern})`).not.toMatch(pattern);
       }
     }
@@ -336,26 +349,13 @@ describe("documentation cannot rot into inaccuracy", () => {
 
   it("the factory-verify staleness guard fails on the claim it was written for", () => {
     // A guard that matches nothing is worse than no guard: it reads as evidence
-    // in review while checking nothing. The sentences below are the ones that
-    // shipped in docs/cli.md and docs/verification-and-merge-gates.md. If a
-    // future edit weakens a pattern, this fails instead of the guard going
-    // quietly vacuous a second time.
-    const shipped = [
-      "### `factory verify` is currently non-functional",
-      "`factory verify` shells out to `npm run` for `format:check`, `lint`, `typecheck`,",
-      "`npm run verify` is the working equivalent.",
-      "`factory verify` is **not** the same gate and does not currently pass",
-      "which is why `npm run verify` is the working equivalent there and `factory verify` is not",
-    ];
-    const stale = [
-      /factory verify`? is (?:currently )?non-functional/i,
-      /factory verify`? is \*\*not\*\* the same gate and does not currently pass/i,
-      /`?factory verify`? (?:shells out to|invokes) `?(?:npm run )?(?:five )?(?:format:check|`npm run`)/i,
-      /`?npm run verify`? is the working equivalent/i,
-      /`?factory verify`? is not\b/i,
-    ];
-    for (const sentence of shipped) {
-      expect(stale.some((pattern) => pattern.test(sentence)), `the guard no longer catches: ${sentence}`).toBe(true);
+    // in review while checking nothing. If a future edit weakens a pattern, this
+    // fails instead of the guard going quietly vacuous a second time.
+    for (const sentence of VERIFY_CLAIMS_THAT_SHIPPED) {
+      expect(
+        STALE_VERIFY_CLAIMS.some((pattern) => pattern.test(sentence)),
+        `the guard no longer catches: ${sentence}`,
+      ).toBe(true);
     }
   });
 
