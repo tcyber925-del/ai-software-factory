@@ -87,6 +87,15 @@ export type {
   StatusTransition,
   WorkUnitTraceability,
 } from "./adapters/linear/index.js";
+export { describeIntakeOutcome, runIntake } from "./kernel/intake.js";
+export type {
+  IntakeEligibility,
+  IntakeRefusal,
+  IntakeRefusalClassification,
+  IntakeResult,
+  IntakeSource,
+  ProviderIntakeAdapter,
+} from "./kernel/intake.js";
 export {createSystemProbe} from "./doctor/probe.js";
 export type {DoctorProbe, RepositoryState, RuntimeAvailability, WorktreeSupport} from "./doctor/probe.js";
 export {defaultShellRunner, runShellVerification} from "./adapters/verification/shell.js";

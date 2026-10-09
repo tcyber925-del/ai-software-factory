@@ -59,6 +59,53 @@ Events form the append-only operational trace. Examples include:
 - integration.ready
 - integration.blocked
 
+## Intake
+Intake is the handover between a task provider — Linear, GitHub, any future one — and the factory.
+`src/kernel/intake.ts` is the contract, and it is the only place a provider is named.
+
+A provider implements `ProviderIntakeAdapter`, supplying its own record type and its own policy type:
+
+| Member | Meaning |
+| --- | --- |
+| `provider` | Stable identifier recorded on every result |
+| `sourceId` / `sourceUrl` | How the provider identifies and links one of its records |
+| `evaluate` | The provider's eligibility rules, in its own vocabulary |
+| `compile` | How an eligible record becomes a Work Unit; `undefined` is a refusal |
+
+`runIntake(adapter, record, policy)` returns an `IntakeResult`, which is one of two shapes:
+`accepted`, carrying a Work Unit, or `refused`, carrying a reason. There is no third outcome and no
+optional Work Unit, so a refusal cannot be mistaken for a pass and a pass cannot be read without one.
+
+Three things follow from that shape:
+
+- **Provider detail stays outside the Work Unit.** Provider identity and the source reference live on
+  `result.source`, beside the compiled Work Unit, never as fields inside it. A Linear status or a
+  GitHub label in a Work Unit would make that work unportable and would force a vendor field into
+  `schemas/work-unit.schema.json`. The contract adds no Work Unit field and changes no schema.
+- **Refusal is a value.** An eligible record a provider cannot compile is refused rather than passed
+  with nothing to dispatch, and the refusal still names the source record so it stays traceable.
+- **Refusal reasons are coarse and provider-specific detail is carried, not discarded.** The boundary
+  classifies a refusal as `not_dispatchable`, `not_allowlisted`, `policy_blocked`, `dependency_incomplete`,
+  `dependency_unresolved`, `requirements_undeclared` or `target_undeclared`. The provider's own reason
+  code accompanies it in `providerReason`, so classifying a rule does not mean hiding it.
+
+**Intake refusal is not scheduler refusal.** The scheduler judges a Work Unit that already exists and
+reports `scheduled` or `blocked`; intake judges a provider record and reports `accepted` or `refused`.
+The vocabularies are disjoint, and an `IntakeResult` is identified by provider and source reference
+rather than by Work Unit id — a refused record never became a Work Unit, so it cannot be reported
+against one. `describeIntakeOutcome` renders either outcome with the `intake` prefix and the provider
+named, because `work run` once printed "intake refused" while reading `planSchedule` decisions and left
+a reader unable to tell an unsatisfied dependency from a refused issue.
+
+Intake is a library boundary rather than a dispatched step. No `factory` command reads a provider:
+`factory work run` begins from a plan of Work Units. See [cli.md](cli.md).
+
+Evaluation is deterministic. The same record and the same policy configuration produce an identical
+result: no clock, no randomness, no inferred fields. A refusal can therefore be reproduced to explain
+it, and a provider cannot drift between two runs without that showing up as a difference.
+
+See `docs/linear-adapter.md` for the rules the Linear adapter applies at this boundary.
+
 ## Linear intake
 Linear is an execution system, not the factory protocol. Only explicitly eligible work dispatches:
 Backlog, Triage, Duplicate, Canceled and Done are never dispatchable and configuration cannot

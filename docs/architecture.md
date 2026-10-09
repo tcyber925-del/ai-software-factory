@@ -32,7 +32,7 @@ Approved specification
         ↓
 Work Unit  (declarative; capabilities, not providers)
         ↓
-Eligibility  (Linear intake — explicit allowlist, nothing inferred)   ← library, not composed
+Eligibility  (intake boundary — provider policy, explicit allowlist)   ← library, not composed
         ↓
 Security gate  (risk class → required isolation)                      ← composed, before dispatch
         ↓
@@ -81,6 +81,61 @@ A Work Unit requests capabilities such as `frontend`, `testing`, or `browser`. I
 
 Provider-specific behavior belongs in adapters.
 
+## The intake boundary
+
+Eligibility is where a provider's records become Work Units, so it is the seam where
+provider detail is most likely to leak into the factory protocol. `src/kernel/intake.ts`
+is that seam: a contract every task provider implements, with the Linear adapter as
+its first consumer.
+
+The contract is small on purpose. A provider supplies its own record type, its own
+policy type, and three things about them — how to identify a record, whether it is
+eligible, and how to compile it. Everything the factory learns about the record
+outside the Work Unit is provider identity and a source reference:
+
+```ts
+interface ProviderIntakeAdapter<TRecord, TPolicy> {
+  readonly provider: string;
+  sourceId(record: TRecord): string;
+  sourceUrl?(record: TRecord): string | undefined;
+  evaluate(record: TRecord, policy: TPolicy): IntakeEligibility;
+  compile(record: TRecord, policy: TPolicy): WorkUnit | undefined;
+}
+
+type IntakeResult =
+  | { outcome: "accepted"; source: IntakeSource; workUnit: WorkUnit }
+  | { outcome: "refused"; source: IntakeSource; refusal: IntakeRefusal };
+```
+
+Three properties are enforced rather than requested:
+
+- **The Work Unit is the only thing that crosses.** A Linear status or a GitHub label
+  is recorded on `result.source`, beside the Work Unit, never inside it. `WorkUnit`
+  stays the portable execution contract it was built to be.
+- **Refusal is a value, not an absence.** `IntakeResult` is a union, so a refused
+  record cannot carry a Work Unit and an accepted one cannot carry a refusal. A caller
+  that forgets to branch on `outcome` gets a type error rather than an unearned
+  dispatch. A provider that accepts work it cannot compile is refused too — eligibility
+  without a statement of the work is not a pass.
+- **Intake refusal is distinguishable from scheduler refusal.** The scheduler judges a
+  Work Unit that already exists; intake judges a provider record that may never become
+  one. Their vocabularies are disjoint — `accepted`/`refused` against
+  `scheduled`/`blocked` — and `describeIntakeOutcome` prefixes every line with `intake`
+  and names the provider and record. `work run` once printed "intake refused" while
+  reading `planSchedule` decisions, which made an unsatisfied dependency
+  indistinguishable from a refused Linear issue.
+
+Provider-specific eligibility rules stay in the adapter. The boundary knows *that* a
+record was refused and in general terms why — `not_dispatchable`, `not_allowlisted`,
+`dependency_incomplete`, `requirements_undeclared` — and never what a status allowlist,
+a `blockedBy` relation or a label means. The provider's own reason code travels
+alongside as an opaque string, so a refusal stays explainable in the provider's
+vocabulary without the factory having to learn it.
+
+Evaluation is deterministic: no clock, no randomness, no inferred fields. The same
+record and policy produce an identical result, so a refusal can be reproduced rather
+than merely reported. See [protocols.md](protocols.md).
+
 ## Runtime abstraction
 `WorkerRuntime` is ten methods, listed in [runtime-adapters.md](runtime-adapters.md). There is no
 method through which a runtime can report success: the contract has nowhere to put that judgement.
@@ -122,6 +177,7 @@ reaches `ready` only on passing verification. `reconstructExecution` decides an 
 | Verification | `src/adapters/verification/shell.ts` |
 | Durable events | `src/state/event-log.ts`, `src/state/provenance.ts` |
 | Risk and isolation | `src/security/risk.ts`, `src/security/index.ts` |
+| Intake boundary | `src/kernel/intake.ts` |
 | Environment checks | `src/doctor/doctor.ts`, `src/doctor/probe.ts` |
 | CLI | `src/cli/`, `src/bin.ts` |
 | Runtimes | `src/adapters/opencode`, `src/adapters/herdr`, `src/adapters/hermes`, `src/fake-runtime.ts` |
