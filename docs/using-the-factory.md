@@ -521,7 +521,7 @@ Read these before you rely on the factory.
 | **A dispatched worktree has no installed dependencies** | It is a fresh checkout, so `npm test` cannot run in it. Your checks must install dependencies first — see below |
 | **Scope is enforced where declared** | `paths` is now a gate: an out-of-scope change blocks `ready`. A Work Unit that declares no `paths` gets no gate, and that is recorded as `undeclared` rather than assumed in-scope. `--no-strict-scope` downgrades to a warning |
 | **Security risk signals are declared, not detected** | `work run` refuses `untrusted`/`destructive` work — but only from signals you declare on the plan. It does **not** read the goal to guess. See below |
-| **Linear intake is not on the dispatch path** | `src/adapters/linear/` ships and is tested, but no CLI command reads it. Use the library directly |
+| **Intake plans; it does not dispatch, and status reflection stays a library call** | `factory intake --source linear\|github` compiles provider records into a plan file you review and then run. It proposes no status transition, and no Work Unit it writes declares `paths`, so a scope gate applies only to plans you add it to by hand. Linear status reflection and live provider fetch remain library calls |
 | **`factory verify` only knows npm scripts** | It runs the project's `verify` script, else the individual steps it declares. A check that is not an npm script is invisible to it |
 | **`docs/architecture.md` is not checked for truth** | `doctor` verifies presence, not accuracy. You own this |
 | **Nested dispatch is refused** | Dispatch from the primary repository root, not from a worktree |
