@@ -266,9 +266,10 @@ fixed and is listed above; recorded here because the pattern matters more than t
 | Repair re-dispatched a runtime that had already failed | Every unit test used a runtime that succeeded |
 | `paths` was documented but never checked | Nothing compared the worktree's diff against the declaration |
 | A fresh clone's `npm test` ran the factory's own suite | Only visible by cloning and following the guide literally |
+| A dispatched agent wrote to the **main checkout**, and the run reported `ready` | The scope gate reads the worktree diff, and the worktree was empty — the gate reported no violation because it looked in the one place nothing had happened |
 
-The recurring shape: **a green suite proves the parts work, not that they compose.** Four of these
-six were invisible to unit tests by construction.
+The recurring shape: **a green suite proves the parts work, not that they compose.** Five of these
+seven were invisible to unit tests by construction.
 
 ## Known divergences
 

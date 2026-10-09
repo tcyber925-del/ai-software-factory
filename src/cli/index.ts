@@ -11,6 +11,7 @@ import { formatDoctorReport, runDoctor } from "../doctor/doctor.js";
 import { createSystemProbe } from "../doctor/probe.js";
 import { JsonlEventLog } from "../state/event-log.js";
 import { gitChangedFiles } from "../adapters/git/changes.js";
+import { gitRepoSnapshot } from "../adapters/git/snapshot.js";
 import { FakeRuntime } from "../fake-runtime.js";
 import { OpenCodeRuntime } from "../adapters/opencode/runtime.js";
 import { HerdrRuntime } from "../adapters/herdr/runtime.js";
@@ -197,6 +198,10 @@ async function workRun(args: ParsedArgs, context: RunContext): Promise<CommandOu
     // downgrades a violation to a warning for the case where a Work Unit legitimately
     // needs to touch more than it predicted.
     changedFiles: gitChangedFiles,
+    // Always supplied, unlike `changedFiles` a moment ago: a run with no scope gate
+    // still works, but a run with no containment gate is the one that reported
+    // `ready` while an agent edited the checkout it was given.
+    repoSnapshot: gitRepoSnapshot,
     ...(args.booleans.has("no-strict-scope") ? { strictScope: false } : {}),
   });
 

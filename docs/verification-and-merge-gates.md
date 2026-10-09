@@ -67,6 +67,52 @@ declared path, and it can reach a worktree it should not before the diff is read
 was deliberately rejected: killing an agent mid-write risks a half-applied change, which is worse
 than a detectable boundary crossing.
 
+### What the scope gate cannot see
+
+The scope gate reads the **worktree's** diff. That is the right thing for it to read, and it leaves
+one gap that is not a matter of degree: **a write that lands outside the worktree is invisible to
+it.** The worktree stays clean, `outOfScope` is empty, and the gate reports no violation — not
+because nothing went wrong, but because it looked in the one place where nothing did.
+
+This was not hypothetical. A dispatched agent created a branch in the main checkout and edited four
+files there, two of them outside its declared `paths`. The worktree was untouched, verification
+passed against an already-green repository, and the run reported `ready`. Every event the factory
+recorded was true. The run was still unsafe, because it verified a tree the work never touched.
+
+So the scope gate answers *"did the work stay inside its boundary?"* and cannot answer *"did the
+work happen in the worktree at all?"*.
+
+### Containment
+
+The containment check answers the second question. Before any agent runs, the factory records the
+repository root's `HEAD` and dirty-file set; after the last dispatch and repair attempt it reads
+them again. Anything that moved there is a breach, and a breach prevents `ready`.
+
+| Situation | Result |
+| --- | --- |
+| Root checkout unchanged | No breach |
+| New files appeared in the root | Blocked, files named |
+| `HEAD` moved — a branch created or a commit made | Blocked, both revisions named |
+| Files already dirty before the run | Not a breach. A checkout in use is the normal case |
+| Files removed | Not a breach. The scope gate still judges the resulting work |
+| The factory's own `.factory/workspaces/` | Exempt by explicit prefix, not by a broad allowlist |
+| No snapshot provider configured | No gate, recorded rather than treated as a pass |
+
+It reads `HEAD` as well as the file list because the observed breach's most alarming half was
+invisible to a file diff: the agent created a branch, which moved `HEAD` and modified nothing.
+
+**This detects, it does not prevent.** An agent that leaves its worktree can still write before the
+check reads. What changes is that the run can no longer *report success* afterwards — which is the
+property that was missing, and the reason a containment breach outranks every other blocking reason:
+the worktree this run verified is not the tree the work landed in, so any verdict beneath it
+describes the wrong tree.
+
+Like the scope gate, it holds regardless of whether a runtime honours the directory it was handed.
+The OpenCode adapter invokes `opencode run`, which by default connects to a long-lived background
+server and executes the agent inside it — so the agent's edits land in the *server's* directory,
+not the worktree the client was started in. That is how the breach above happened, and it is why
+the check watches the checkout rather than trusting the path.
+
 ## Independence rule
 
 The agent or runtime that performs implementation must not be the sole authority that declares the result correct.
