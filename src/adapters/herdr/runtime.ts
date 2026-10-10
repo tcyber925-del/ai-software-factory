@@ -14,7 +14,7 @@ import { defaultHerdrCommandRunner } from "./process.js";
 
 interface HerdrWorkspaceResponse {
   result?: {
-    workspace?: { workspace_id?: string };
+    workspace?: { workspace_id?: string; active_tab_id?: string };
     root_pane?: { pane_id?: string };
     worktree?: { worktree_id?: string; path?: string; branch?: string };
   };
@@ -48,6 +48,7 @@ export class HerdrRuntime implements WorkerRuntime {
   readonly #workspaceLabelPrefix: string;
   readonly #workspaces = new Map<string, WorkspaceRef>();
   readonly #workUnitIds = new Map<string, string>();
+  readonly #rootPanes = new Map<string, string>();
   readonly #agents = new Map<string, HerdrAgentState>();
 
   constructor(options: HerdrRuntimeOptions = {}) {
@@ -85,6 +86,8 @@ export class HerdrRuntime implements WorkerRuntime {
       const paneId = response.result?.root_pane?.pane_id;
       if (!id || !paneId) throw new Error("Herdr workspace response omitted workspace or pane ID");
       const workspace = { id, path: this.#repositoryRoot };
+      // Kept because `workspace create` reports the pane and `workspace get` does not.
+      this.#rootPanes.set(id, paneId);
       this.#workspaces.set(id, workspace);
       this.#workUnitIds.set(id, workUnit.id);
       return workspace;
@@ -262,19 +265,43 @@ export class HerdrRuntime implements WorkerRuntime {
       await this.#runJson(["workspace", "close", workspace.id]);
       this.#workspaces.delete(workspace.id);
       this.#workUnitIds.delete(workspace.id);
+      this.#rootPanes.delete(workspace.id);
     } catch (error) {
       throw this.#runtimeError("cleanup_failed", error);
     }
   }
 
+  /**
+   * The workspace's root pane.
+   *
+   * **Read from the cache, not re-fetched.** This used to run `workspace get` and read
+   * `result.root_pane.pane_id`, and on herdr 0.9.3 that field is absent — `workspace get`
+   * returns only `result.type` and `result.workspace`. Every dispatch therefore failed at
+   * `workspace_failed` with "response omitted root pane ID", before an agent was ever
+   * created. `workspace create` *does* return the pane, so it is captured there instead.
+   *
+   * The fallback exists for a workspace this runtime did not create — but it reads
+   * `active_tab_id`, which herdr 0.9.3 does report, rather than inventing a pane. A
+   * workspace whose pane cannot be determined is an error, not a guess: starting an agent
+   * somewhere other than its worktree is the exact failure containment exists to catch, so
+   * it must not be papered over with a plausible-looking id.
+   */
   async #rootPane(workspaceId: string): Promise<string> {
+    const cached = this.#rootPanes.get(workspaceId);
+    if (cached !== undefined) return cached;
+
     const response = await this.#runJson<HerdrWorkspaceResponse>([
       "workspace",
       "get",
       workspaceId,
     ]);
-    const pane = response.result?.root_pane?.pane_id;
-    if (!pane) throw new Error("Herdr workspace response omitted root pane ID");
+    const pane = response.result?.root_pane?.pane_id ?? response.result?.workspace?.active_tab_id;
+    if (!pane) {
+      throw new Error(
+        `herdr workspace ${workspaceId} reported no root pane; it was not created by this runtime and herdr ${"workspace get"} does not name one`,
+      );
+    }
+    this.#rootPanes.set(workspaceId, pane);
     return pane;
   }
 
