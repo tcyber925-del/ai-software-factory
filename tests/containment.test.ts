@@ -117,6 +117,22 @@ function snapshots(before: RepoSnapshot, after: RepoSnapshot) {
   };
 }
 
+/**
+ * Walks a fixed sequence, repeating the last entry once exhausted.
+ *
+ * Needed to reach the gate check rather than the early one: a breach on the first
+ * attempt is caught the moment execution ends, so the only way to exercise the gate
+ * is an attempt that starts clean and a later attempt that does not.
+ */
+function snapshotsSequence(...sequence: RepoSnapshot[]) {
+  let calls = 0;
+  return async () => {
+    const index = Math.min(calls, sequence.length - 1);
+    calls += 1;
+    return sequence[index]!;
+  };
+}
+
 describe("a containment breach is detected from two root snapshots", () => {
   it("reports files that appeared in the root checkout", () => {
     const breach = detectContainmentBreach(clean, {
@@ -203,7 +219,10 @@ describe("a breach stops the run reaching ready", () => {
     });
 
     const run = result.runs[0]!;
-    expect(run.verification.status).toBe("passed");
+    // Verification never ran: the breach is found before it would have. Asserting
+    // it passed would describe the old behaviour, where the gate checked
+    // containment only after minutes of verifying a tree the work never reached.
+    expect(run.verification.status).not.toBe("passed");
     expect(result.status).toBe("blocked");
     expect(run.integration.state).toBe("blocked");
     expect(run.integration.reason).toMatch(/containment breach/);
@@ -306,7 +325,13 @@ describe("a breach stops the run reaching ready", () => {
   });
 
   it("records a breach even when the checks also failed, and leads with it", async () => {
-    // Containment first: the worktree this run verified is not the tree the work
+    // Reaches the gate rather than the early check, by breaching on the repair
+    // attempt instead of the first: an attempt that starts clean passes the early
+    // check, and a later one does not. Without this the gate path is untested —
+    // and it is the path where a run can be both broken and out of its boundary,
+    // so both reasons have to survive into the record.
+    //
+    // Containment leads: the worktree this run verified is not the tree the work
     // landed in, so the verification verdict describes the wrong tree.
     const failing: ShellRunner = {
       async run() {
@@ -320,9 +345,14 @@ describe("a breach stops the run reaching ready", () => {
       checks,
       cwd: ".",
       changedFiles: inScope,
-      repoSnapshot: snapshots(clean, { head: "aaaaaaa", dirty: ["src/x.ts"] }),
+      // baseline, then clean after attempt 1 (early check passes), then breached.
+      repoSnapshot: snapshotsSequence(
+        clean,
+        clean,
+        { head: "aaaaaaa", dirty: ["src/x.ts"] },
+      ),
       runner: failing,
-      repairPolicy: { maxAttempts: 0 },
+      repairPolicy: { maxAttempts: 1 },
       ...clock(),
     });
 
@@ -330,6 +360,95 @@ describe("a breach stops the run reaching ready", () => {
     expect(reason).toMatch(/containment breach/);
     expect(reason).toMatch(/verification/);
     expect(reason.indexOf("containment breach")).toBeLessThan(reason.indexOf("verification"));
+  });
+
+  it("does not run verification at all once a breach is seen", async () => {
+    // The gate also checks containment, and stays the right place for the total.
+    // But it runs after verification, and on a real project that is `npm ci` plus
+    // the suite — minutes. Both observed escapes produced no verdict at all,
+    // because the runs were killed inside that window with the breach already true
+    // and unrecorded.
+    //
+    // So the check now happens the moment the agent stops, and the point of this
+    // test is that nothing expensive runs afterwards: verifying a tree the work
+    // never landed in spends minutes to produce a verdict about the wrong tree.
+    let verificationRan = false;
+    const counting: ShellRunner = {
+      async run() {
+        verificationRan = true;
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+    };
+
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [realTreeRuntime()],
+      checks,
+      cwd: ".",
+      changedFiles: inScope,
+      repoSnapshot: snapshots(clean, { head: "aaaaaaa", dirty: ["docs/adoption.md"] }),
+      runner: counting,
+      ...clock(),
+    });
+
+    expect(verificationRan).toBe(false);
+    expect(result.status).toBe("blocked");
+    expect(result.runs[0]?.integration.reason).toMatch(/containment breach/);
+  });
+
+  it("does not spend a repair attempt on a breach", async () => {
+    // Repair fixes failing checks against completed work. There is no completed
+    // work in the right place to repair, so every attempt would be wasted motion
+    // against a run whose premise is already false.
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [realTreeRuntime()],
+      checks,
+      cwd: ".",
+      changedFiles: inScope,
+      repoSnapshot: snapshots(clean, { head: "bbbbbbb", dirty: [] }),
+      runner: passing,
+      repairPolicy: { maxAttempts: 2 },
+      ...clock(),
+    });
+
+    expect(result.runs[0]?.repairAttempts ?? 0).toBe(0);
+    expect(result.runs[0]?.integration.reason).toMatch(/containment breach/);
+  });
+
+  it("names the worktree in the instruction it hands the runtime", async () => {
+    // Not a fix — probes showed the agent already works where it is told. But the
+    // instruction used to be `workUnit.goal` alone, leaving the agent to infer its
+    // working directory, and an inference is not a property to ship on.
+    let seen: string | undefined;
+    const capturing: LabelledRuntime = {
+      ...realTreeRuntime(),
+      runtime: {
+        ...realTreeRuntime().runtime,
+        promptAgent: async (_agent, prompt: string) => {
+          seen = prompt;
+        },
+      },
+    };
+
+    await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [capturing],
+      checks,
+      cwd: ".",
+      changedFiles: inScope,
+      runner: passing,
+      ...clock(),
+    });
+
+    expect(seen).toBeDefined();
+    expect(seen).toMatch(/Work in .*worktree/);
+    // The goal survives; the boundary is added to it, not substituted for it.
+    expect(seen).toContain("Prove containment");
+    expect(seen).toMatch(/only place this work belongs/i);
   });
 
   it("reports no breach when no provider is supplied", async () => {

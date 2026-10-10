@@ -49,7 +49,15 @@ export interface ExecuteWorkUnitOptions {
   workUnit: WorkUnit;
   worker: Worker;
   runtimes: LabelledRuntime[];
-  prompt: string;
+  /**
+   * The instruction for the agent.
+   *
+   * A function is accepted as well as a string because the worktree does not exist
+   * until `createWorktree` has run, and an instruction that names where to work
+   * cannot be written before that. A string still works for callers with nothing
+   * path-dependent to say.
+   */
+  prompt: string | ((worktreePath: string | undefined) => string);
   schema: JsonSchema;
   baseRevision?: string;
   /** When provided, factory and runtime events are persisted durably as they occur. */
@@ -146,7 +154,8 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
     emit("worker.started", { runtime: chosen.name, agentId: agent.id, workerId: worker.id });
     await persist("worker.started", { runtime: chosen.name, agentId: agent.id, workerId: worker.id });
 
-    await runtime.promptAgent(agent, prompt);
+    const instruction = typeof prompt === "function" ? prompt(worktree.worktreePath) : prompt;
+    await runtime.promptAgent(agent, instruction);
     emit("worker.prompted", { agentId: agent.id });
 
     const runtimeStatus = await runtime.waitAgent(agent, 120_000);

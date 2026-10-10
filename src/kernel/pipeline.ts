@@ -14,7 +14,7 @@ import type { ChangedFiles } from "../adapters/git/changes.js";
 import { checkScope, describeScopeViolation } from "./scope.js";
 import type { ScopeCheck } from "./scope.js";
 import { detectContainmentBreach, describeContainmentBreach } from "./containment.js";
-import type { RepoSnapshot, RepoSnapshotProvider } from "./containment.js";
+import type { ContainmentBreach, RepoSnapshot, RepoSnapshotProvider } from "./containment.js";
 import type { LabelledRuntime } from "./work-unit.js";
 import type { JsonSchema } from "./json-schema.js";
 import type { PlanScheduleOptions, ScheduledWorkUnit, SchedulePlan } from "./scheduler.js";
@@ -481,6 +481,20 @@ async function runOne(
     }
   }
 
+  /**
+   * Reads the repository root now and reports a breach against the baseline.
+   *
+   * Shared by the two places that need it: the moment execution ends, and the
+   * integration gate. Between them they answer different questions — "did the
+   * agent leave while it was working" and "did anything move in total" — and a run
+   * that repairs can have escaped on a later attempt rather than the first.
+   */
+  const containmentBreachNow = async (): Promise<ContainmentBreach | undefined> => {
+    if (options.repoSnapshot === undefined || containmentBefore === undefined) return undefined;
+    const after = await readRepoSnapshot(options.repoSnapshot, cwd);
+    return after === undefined ? undefined : detectContainmentBreach(containmentBefore, after);
+  };
+
   try {
     execution = await executeWorkUnit({
       ...base,
@@ -489,9 +503,40 @@ async function runOne(
       cleanup: false,
       workUnit,
       worker: { id: `worker-${workUnit.id}`, capabilities: workUnit.capabilities, runtime: options.runtimes[0]?.name ?? "unknown" },
-      prompt: workUnit.goal,
+      prompt: (worktreePath) => buildWorkInstruction(workUnit, worktreePath),
       runtimes,
     });
+
+    /**
+     * Containment, checked the instant the agent stops — not at the gate.
+     *
+     * The gate also checks, and is still the right place for the total. But it
+     * runs *after* verification, and verification on a real project is minutes:
+     * `npm ci` plus the suite. Two observed escapes produced no verdict at all,
+     * because both runs were killed inside that window with the breach already
+     * true and unrecorded.
+     *
+     * A breach found here also means the tree about to be verified is not the tree
+     * the work landed in, so verifying it at all is wasted time on a wrong answer.
+     * Blocking now reports the real reason in seconds, and leaves the repair loop
+     * alone — repairing fixes failing checks against completed work, and there is
+     * no completed work in the right place to repair.
+     */
+    const earlyBreach = await containmentBreachNow();
+    if (earlyBreach !== undefined) {
+      await eventLog?.append([
+        {
+          workUnitId: workUnit.id,
+          runId,
+          source: "factory",
+          type: "containment.breached",
+          payload: { kind: earlyBreach.kind, files: [...earlyBreach.files], stage: "execution" },
+          id: id(),
+          timestamp: now(),
+        } as LoggableEvent,
+      ]);
+      return blockedWithoutVerification(workUnit, execution, describeContainmentBreach(earlyBreach));
+    }
 
     /**
      * Verification runs against the tree that was actually executed.
@@ -613,12 +658,7 @@ async function runOne(
     // Read after every dispatch and repair attempt, so it covers the whole run. A
     // breach leads every other reason: the worktree this run verified is not the
     // tree the work landed in, so any verdict beneath it describes the wrong tree.
-    const containmentAfter =
-      containmentBefore === undefined ? undefined : await readRepoSnapshot(options.repoSnapshot, cwd);
-    const containmentBreach =
-      containmentBefore === undefined || containmentAfter === undefined
-        ? undefined
-        : detectContainmentBreach(containmentBefore, containmentAfter);
+    const containmentBreach = await containmentBreachNow();
     if (containmentBreach !== undefined) {
       await eventLog?.append([
         {
@@ -725,4 +765,35 @@ function foldReasons(reasons: readonly (string | undefined)[]): string | undefin
     (reason): reason is string => reason !== undefined && reason !== "verification_passed",
   );
   return kept.length === 0 ? undefined : kept.join("; ");
+}
+
+/**
+ * The instruction handed to the runtime.
+ *
+ * Previously this was `workUnit.goal` alone: one abstract sentence, no path, no
+ * boundary. The agent was left to infer where it was, and an agent inferring its
+ * working directory is not a property worth shipping on — the isolation claim
+ * should not rest on the agent working it out.
+ *
+ * **Hygiene, not a fix.** Controlled probes put an agent's work in the right place
+ * every time, including one that had to search for the code before editing it, so
+ * this is not the cause of the observed escapes. It states the boundary explicitly
+ * because it costs nothing and because the alternative is relying on an agent
+ * guessing.
+ *
+ * Falls back to the bare goal when the runtime reported no worktree. In that case
+ * naming a directory would be inventing one, and the run blocks later anyway
+ * rather than proceeding against an invented path.
+ */
+function buildWorkInstruction(workUnit: WorkUnit, worktreePath: string | undefined): string {
+  if (worktreePath === undefined) return workUnit.goal;
+  return [
+    workUnit.goal,
+    "",
+    `Work in ${worktreePath}.`,
+    "That directory is the isolated worktree for this Work Unit, and it is the only place this",
+    "work belongs. Do not create or switch branches, and do not modify anything outside it —",
+    "including the repository this worktree was created from. If something appears to require a",
+    "change elsewhere, stop and report it rather than making one.",
+  ].join(" ");
 }
