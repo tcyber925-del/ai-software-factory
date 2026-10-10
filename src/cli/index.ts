@@ -12,6 +12,7 @@ import { createSystemProbe } from "../doctor/probe.js";
 import { JsonlEventLog } from "../state/event-log.js";
 import { gitChangedFiles } from "../adapters/git/changes.js";
 import { gitRepoSnapshot } from "../adapters/git/snapshot.js";
+import { fingerprintWorktree } from "../kernel/settle.js";
 import { FakeRuntime } from "../fake-runtime.js";
 import { OpenCodeRuntime } from "../adapters/opencode/runtime.js";
 import { HerdrRuntime } from "../adapters/herdr/runtime.js";
@@ -202,6 +203,10 @@ async function workRun(args: ParsedArgs, context: RunContext): Promise<CommandOu
     // still works, but a run with no containment gate is the one that reported
     // `ready` while an agent edited the checkout it was given.
     repoSnapshot: gitRepoSnapshot,
+    // Always supplied, like repoSnapshot. A runtime resolving its prompt call is
+    // not evidence the agent stopped, and without this the pipeline verifies a
+    // tree that may still be being written to.
+    settleWork: { fingerprint: fingerprintWorktree },
     ...(args.booleans.has("no-strict-scope") ? { strictScope: false } : {}),
   });
 

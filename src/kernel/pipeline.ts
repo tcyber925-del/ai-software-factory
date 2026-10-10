@@ -15,6 +15,8 @@ import { checkScope, describeScopeViolation } from "./scope.js";
 import type { ScopeCheck } from "./scope.js";
 import { detectContainmentBreach, describeContainmentBreach } from "./containment.js";
 import type { ContainmentBreach, RepoSnapshot, RepoSnapshotProvider } from "./containment.js";
+import { waitForSettledWork } from "./settle.js";
+import type { SettleOptions, SettleResult, WorktreeFingerprint } from "./settle.js";
 import type { LabelledRuntime } from "./work-unit.js";
 import type { JsonSchema } from "./json-schema.js";
 import type { PlanScheduleOptions, ScheduledWorkUnit, SchedulePlan } from "./scheduler.js";
@@ -107,6 +109,17 @@ export interface RunPipelineOptions {
    * treating as a pass.
    */
   repoSnapshot?: RepoSnapshotProvider;
+  /**
+   * Waits for the executed worktree to stop changing before verification begins.
+   *
+   * A runtime resolving its prompt call is a statement about a process, not about
+   * the work. Verifying while an agent is still writing judges a state the run will
+   * never report, and cleanup then deletes the tree underneath it.
+   *
+   * Omitted means no wait. Every real caller supplies one; see the CLI. It is
+   * optional rather than required so the kernel stays usable without a filesystem.
+   */
+  settleWork?: SettleOptions & { readonly fingerprint: WorktreeFingerprint };
   /**
    * Whether an out-of-scope change prevents `ready`. Defaults to `true` where
    * `paths` are declared: the point is to make the boundary real, and an opt-in gate
@@ -539,6 +552,43 @@ async function runOne(
     }
 
     /**
+     * Wait for the work to stop changing, before anything reads it.
+     *
+     * Everything after this point assumes the worktree holds the finished work.
+     * Verification reads it, the scope gate diffs it, and cleanup deletes it — and
+     * an agent still writing makes all three judgements about a state that is not
+     * the one the run will report.
+     *
+     * An unsettled worktree **blocks** rather than proceeding. The alternative is to
+     * verify a moving target and report the result, which is the false green this
+     * exists to remove: "nothing verified must never be reported as verification
+     * passed", and a tree that is still changing has not been verified at all.
+     *
+     * Only the first attempt waits. A repair attempt re-dispatches and re-executes,
+     * and that work settles on its own terms afterwards — waiting here again would
+     * charge every repair the full settle cost for work that has not started yet.
+     */
+    const settling = await settleExecutedWork(options, execution.worktreePath);
+    if (settling !== undefined && !settling.settled) {
+      await eventLog?.append([
+        {
+          workUnitId: workUnit.id,
+          runId,
+          source: "factory",
+          type: "work.unsettled",
+          payload: { reads: settling.reads, reason: settling.reason ?? "unknown" },
+          id: id(),
+          timestamp: now(),
+        } as LoggableEvent,
+      ]);
+      return blockedWithoutVerification(
+        workUnit,
+        execution,
+        `the dispatched work had not finished when the runtime reported it complete — ${settling.reason ?? "the worktree was still changing"}; refusing to verify a tree that is still being written to`,
+      );
+    }
+
+    /**
      * Verification runs against the tree that was actually executed.
      *
      * This is the second invariant composition puts at risk. Verifying the factory's
@@ -796,4 +846,22 @@ function buildWorkInstruction(workUnit: WorkUnit, worktreePath: string | undefin
     "including the repository this worktree was created from. If something appears to require a",
     "change elsewhere, stop and report it rather than making one.",
   ].join(" ");
+}
+
+/**
+ * Waits for the executed worktree to settle, if the caller asked for it and there
+ * is a tree to wait on.
+ *
+ * Returns `undefined` when there is nothing to do, which the caller reads as "no
+ * verdict" rather than "settled" — so an absent fingerprint or an absent worktree
+ * never silently becomes a pass. A runtime that reported no worktree is blocked
+ * further down for that reason anyway.
+ */
+async function settleExecutedWork(
+  options: RunPipelineOptions,
+  worktreePath: string | undefined,
+): Promise<SettleResult | undefined> {
+  if (options.settleWork === undefined || worktreePath === undefined) return undefined;
+  const { fingerprint, ...settleOptions } = options.settleWork;
+  return waitForSettledWork(fingerprint, worktreePath, settleOptions);
 }

@@ -108,10 +108,58 @@ the worktree this run verified is not the tree the work landed in, so any verdic
 describes the wrong tree.
 
 Like the scope gate, it holds regardless of whether a runtime honours the directory it was handed.
-The OpenCode adapter invokes `opencode run`, which by default connects to a long-lived background
-server and executes the agent inside it — so the agent's edits land in the *server's* directory,
-not the worktree the client was started in. That is how the breach above happened, and it is why
-the check watches the checkout rather than trusting the path.
+That is not a hypothetical precaution. Controlled probes showed an agent placing its work correctly
+every time — including in a worktree nested inside the repository, and including one that had to
+search for the code before editing it — so directory resolution is **not** the mechanism, and
+`opencode run --standalone` was proposed as a fix and disproven. The check watches the checkout
+because the alternative was trusting a path that demonstrably is not the thing that fails.
+
+### Waiting for the work to stop changing
+
+A runtime resolving its prompt call is a statement about a **process**, not about the **work**. The
+factory treats it as the latter, which is the error `AGENTS.md` already names: *runtime status must
+never be treated as proof of Work Unit completion*.
+
+When the two disagree, everything downstream stands on sand. Verification reads a tree that is still
+being written to, so it judges a state the run will never report; cleanup then deletes that tree
+underneath a live agent; and the run can reach `ready` describing work that had not finished
+arriving. Both observed escapes fit — one logged `prompt.completed` and `integration.ready` in the
+same second and wrote its files ten minutes later, the other consumed its entire 900s ceiling and
+was killed mid-work.
+
+So the pipeline stops inferring completion from a process exit and observes the artifact instead. After
+execution it polls the executed worktree until its contents stop changing, and only then verifies.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `intervalMs` | 250 | Gap between reads |
+| `stableReads` | 3 | Consecutive agreeing reads required |
+| `timeoutMs` | 120000 | Ceiling on the whole wait |
+
+`stableReads` is the real parameter. An agent edits in bursts — write, think, write — so one quiet
+interval proves almost nothing; a change after a quiet run resets the count, so settling means the
+burst is genuinely over. `timeoutMs` exists only to bound a run that never settles, so it can be
+generous without making the common case slow. A settled wait costs three reads.
+
+**The fingerprint is path, size and modification time — not content.** Hashing every byte of a real
+repository on each poll would cost more than the wait saves. The goal is to notice that *something* is
+still being written, which a size or mtime change reveals. Size and mtime are used together because a
+write landing the same number of bytes in the same millisecond would satisfy mtime alone.
+
+**`.git` and `node_modules` are excluded.** An install writing `node_modules` is not the agent's
+work, and including it would mean no worktree ever settles on a real project — the failure mode of a
+gate that always fires.
+
+| Situation | Result |
+| --- | --- |
+| Work stops changing | Verify as normal |
+| Work never stops changing | **Blocked**, naming the bound and the read count, with a `work.unsettled` event |
+
+Blocking rather than verifying anyway is deliberate. Verifying a moving target and reporting the
+result is the false green: a tree still being written to has not been verified at all.
+
+This observes the artifact verification actually cares about, so it does not depend on any runtime
+reporting honestly, and it needs no change to the `WorkerRuntime` contract.
 
 ## Independence rule
 
