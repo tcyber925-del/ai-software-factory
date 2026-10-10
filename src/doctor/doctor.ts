@@ -166,11 +166,41 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   for (const requirement of runtimes) {
     const availability = await probe.runtimeAvailability(requirement.name);
     if (availability.available) {
+      // Installed is not the same claim as usable, and the report must not make the
+      // stronger one on the evidence of the weaker check.
+      //
+      // A runtime can be on PATH, version correctly, and still fail every dispatch:
+      // the default model may be gated, unauthenticated, or out of quota, and none
+      // of that is visible to `--version`. Claiming "available" on that basis sent an
+      // operator into a run that could not succeed, and the failure surfaced minutes
+      // later at a prompt timeout rather than here.
+      //
+      // So the wording follows the evidence: with a dispatch probe, "is available";
+      // without one, "is installed", which is precisely what was checked.
+      const dispatch = probe.dispatchCheck === undefined ? undefined : await probe.dispatchCheck(requirement.name);
+      if (dispatch !== undefined && dispatch.probed && !dispatch.ok) {
+        diagnostics.push({
+          id: `runtime.${requirement.name}`,
+          severity: "error",
+          summary: `${requirement.name} is installed but cannot run a prompt`,
+          remedy: `Fix the runtime before dispatching: ${dispatch.detail ?? "the probe could not complete"}`,
+        });
+        continue;
+      }
+      const probed = dispatch !== undefined && dispatch.probed;
       diagnostics.push({
         id: `runtime.${requirement.name}`,
         severity: "ok",
-        summary: `${requirement.name} (${requirement.role}) is available`,
-        ...(availability.version === undefined ? {} : { detail: availability.version }),
+        summary: probed
+          ? `${requirement.name} (${requirement.role}) is available`
+          : `${requirement.name} (${requirement.role}) is installed`,
+        ...(probed
+          ? availability.version === undefined
+            ? {}
+            : { detail: availability.version }
+          : {
+              detail: `binary present; dispatch not verified${dispatch?.detail === undefined ? "" : ` (${dispatch.detail})`} — run \`doctor --probe\` to check`,
+            }),
       });
       continue;
     }

@@ -128,3 +128,39 @@ The 5 required project files are the protocol and policy files the doctor checks
 require `schemas/`, which is correct — an adopting project does not ship them, and the CLI now
 resolves the Work Unit schema relative to the installed factory rather than the cwd. See
 [cli.md](cli.md).
+
+## What runtime health means
+
+Doctor reports a runtime as **installed** — its binary is on `PATH` and answers
+`--version`. That is what the default check establishes, and the wording is kept to it.
+
+It is not the same claim as *available to dispatch*, and the difference is not academic.
+A runtime can be installed, version correctly, and fail every dispatch: the configured
+model may be gated behind a subscription, unauthenticated, or out of quota, and none of
+that is visible to `--version`. Observed in the field — `doctor` reporting
+`8 ok, 0 error(s)` on a machine where every dispatch through `opencode` failed at the
+provider.
+
+### `--probe`
+
+```
+factory doctor --probe
+```
+
+Runs one trivial prompt per runtime and reports what actually happens. A runtime that
+cannot run a prompt is an **error**, with the reason, rather than a green line that
+promises a dispatch will work.
+
+It is opt-in because it costs a model call per runtime and crosses the network, which is
+the wrong price for a check that usually runs in CI. Without it the report says
+`is installed` and points at `--probe`, so the gap is stated rather than papered over.
+
+Two limits, stated so the output is not over-read:
+
+- **Not every runtime is probed.** `herdr` is a terminal workspace manager with no `run`
+  subcommand and `hermes` takes its prompt as `-z`, so a single guessed command proved
+  nothing and reported two working runtimes as broken. A runtime with no known
+  invocation is reported as **not probed** — never as failed. A failure we did not
+  establish is the same mistake as a success we did not establish.
+- **The probe is not the run.** Passing means a prompt completed. It says nothing about
+  whether the Work Unit's own verification will pass.

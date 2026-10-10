@@ -331,8 +331,12 @@ async function factoryVerify(context: RunContext): Promise<CommandOutput> {
 }
 
 async function factoryDoctor(args: ParsedArgs, context: RunContext): Promise<CommandOutput> {
-  void args;
-  const report = await runDoctor({ probe: createSystemProbe(context.cwd) });
+  // `--probe` actually runs one prompt per runtime. Off by default because it costs a
+  // model call each; without it the report says "is installed" rather than "is
+  // available", because installed is all `--version` can establish.
+  const report = await runDoctor({
+    probe: createSystemProbe(context.cwd, { probeDispatch: args.booleans.has("probe") }),
+  });
   return {
     // A blocked environment is reported as a failure so CI can gate on it, while
     // a merely degraded one (e.g. an absent optional runtime) is not an error.
