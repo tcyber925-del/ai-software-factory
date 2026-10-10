@@ -78,7 +78,7 @@ export const USAGE = [
   "  factory work run       --work-units <plan.json> [--runtime <name>]",
   "  factory work validate  --work-units <plan.json>",
   "  factory verify",
-  "  factory doctor",
+  "  factory doctor [--probe]",
   "",
   ...INTAKE_USAGE,
   "",
