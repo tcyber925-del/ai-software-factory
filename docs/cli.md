@@ -315,6 +315,32 @@ installed. `opencode`, `herdr`, and `hermes` appear only when their binary is on
 `PATH`; a runtime that cannot be constructed is not offered rather than offered and
 failing mid-run.
 
+### Selection is fleet order
+
+`selectRuntime` takes **the first runtime that satisfies every capability** and does
+no ranking of its own — deliberately, because a kernel that guessed which runtime was
+"best" would be asserting something it cannot know. So the order `availableRuntimes`
+builds *is* the selection policy, and `fake` is appended **last**.
+
+That ordering is load-bearing. `fake` declares a broad capability set
+(`frontend`, `backend`, `browser`, `testing`, `documentation`) and creates a
+*fictional* worktree path, so when it led the fleet it won every Work Unit it could
+satisfy — verification then failed against a path that does not exist, repair burned
+its attempts, and the run blocked for a reason no operator could act on:
+
+```
+$ factory doctor          # 8 ok, 0 error(s), three runtimes "available"
+$ factory work run …      # blocked — repair limit reached
+```
+
+Last makes `fake` a **fallback**: chosen only when nothing installed can satisfy the
+work, which is the reason it exists. Naming it explicitly still selects it —
+`--runtime fake` filters the fleet to a single entry before selection happens.
+
+If you install `herdr` and do not pass `--runtime`, you get `herdr`. Before this
+ordering existed you got `fake`, and the failure looked like a broken factory rather
+than a runtime that cannot run checks.
+
 `fake` cannot pass real shell checks, because it creates a fictional worktree
 path. That is correct behaviour: it proves the pipeline blocks, not that it works.
 To see a `ready` run against real checks, use a runtime that creates a real tree,

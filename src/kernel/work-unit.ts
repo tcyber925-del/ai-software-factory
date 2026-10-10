@@ -130,6 +130,18 @@ export function validateWorkUnit(workUnit: WorkUnit, schema: JsonSchema): WorkUn
  *
  * A Work Unit whose capabilities cannot be satisfied blocks dispatch. It is
  * never downgraded to a partially capable runtime.
+ *
+ * **Fleet order is the preference order.** The first candidate that satisfies every
+ * capability wins, and there is no ranking here — deliberately, because a kernel
+ * that guessed which runtime was "best" would be asserting something it cannot
+ * know. Callers order the fleet instead, which means they also decide what a
+ * fallback looks like.
+ *
+ * That contract is load-bearing rather than incidental. The `fake` runtime declares
+ * a broad capability set and produces a fictional worktree, so when a caller put it
+ * first it won every Work Unit it could satisfy, and each run blocked against a
+ * path that does not exist. `availableRuntimes` therefore appends it last, making it
+ * a fallback rather than a default.
  */
 export async function selectRuntime(workUnit: WorkUnit, runtimes: LabelledRuntime[]): Promise<RuntimeSelection> {
   const candidates: RuntimeCandidate[] = [];

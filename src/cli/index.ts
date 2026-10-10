@@ -72,18 +72,32 @@ export function loadSchema(): JsonSchema {
  * an unavailable runtime is reported rather than silently substituted.
  */
 export function availableRuntimes(repositoryRoot: string, promptTimeoutMs?: number): LabelledRuntime[] {
-  const runtimes: LabelledRuntime[] = [{ name: "fake", runtime: new FakeRuntime() }];
   const timeout = promptTimeoutMs === undefined ? {} : { promptTimeoutMs };
   const optional: LabelledRuntime[] = [
     { name: "opencode", runtime: new OpenCodeRuntime({ repositoryRoot, ...timeout }) },
     { name: "herdr", runtime: new HerdrRuntime({ repositoryRoot }) },
     { name: "hermes", runtime: new HermesRuntime({ repositoryRoot }) },
   ];
+  const runtimes: LabelledRuntime[] = [];
   for (const candidate of optional) {
     // A runtime whose binary is absent is not offered, rather than offered and
-    // failing mid-run. `fake` is always present so a fresh clone can still run.
+    // failing mid-run.
     if (isOnPath(candidate.name)) runtimes.push(candidate);
   }
+  // `fake` last, and this ordering is load-bearing.
+  //
+  // `selectRuntime` takes the first candidate that satisfies a Work Unit's
+  // capabilities, with no ranking of its own, so fleet order *is* the selection
+  // policy. `fake` declares a broad capability set and creates a fictional
+  // worktree, so when it led the fleet it won every Work Unit it could satisfy —
+  // verification then failed against a path that does not exist, repair burned its
+  // attempts, and the run blocked for a reason no operator could act on.
+  //
+  // Last means it is a fallback: chosen when nothing installed can satisfy the work,
+  // which is the point of having it, so a fresh clone with nothing on `PATH` still
+  // runs. Naming it explicitly still selects it — `--runtime fake` filters the fleet
+  // to one entry before selection happens.
+  runtimes.push({ name: "fake", runtime: new FakeRuntime() });
   return runtimes;
 }
 
