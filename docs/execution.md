@@ -16,8 +16,11 @@ next, and nothing here can mark work correct. Ordering is the scheduler's job
 ```
 validate Work Unit
   -> resolve required capabilities
+  -> pre-dispatch policy screen (risk, branch, credentials, dangerous operations)
   -> select a runtime that provides all of them
   -> create isolated workspace + worktree
+  -> request runtime-bound isolation attestation
+  -> refuse before start when evidence is missing, malformed, stale, mismatched, or insufficient
   -> start and prompt the worker
   -> wait, collect runtime evidence
   -> (independently) run deterministic verification
@@ -25,6 +28,7 @@ validate Work Unit
 ```
 
 Each stage emits an `ExecutionEvent`, so an execution is reconstructable from its events alone.
+Pre-agent isolation admission also records a durable security decision.
 
 ## Modules
 
@@ -58,15 +62,21 @@ observed so far, so an interrupted execution stays inspectable.
 the *runtime finished*. It says nothing about correctness. `runtimeStatus` and `runtimeEvidence`
 are operational evidence only.
 
-**5. Verification is structurally independent.** `runShellVerification` accepts no execution
+**5. An agent starts only after isolation is attested.** After the worktree exists and before
+`startAgent`, the runtime must produce typed, runtime-bound isolation evidence. A caller-supplied
+label is refused. Missing, malformed, stale, mismatched, or insufficient evidence blocks execution
+with `isolation_unattested` and no `worker.started` event. Attestation is evidence, not containment
+proof: a worktree is not a sandbox.
+
+**6. Verification is structurally independent.** `runShellVerification` accepts no execution
 record, no runtime status and no agent state. It cannot consult runtime completion even if a caller
 wanted it to, because nothing in its inputs carries that information.
 
-**6. Integration readiness requires independent passing verification.**
+**7. Integration readiness requires independent passing verification.**
 `buildIntegrationResult` reaches `state: "ready"` only when `verification.status === "passed"`.
 Execution state is recorded for traceability but never decides the outcome.
 
-**7. Verification runs against the executed worktree.** When composed, the pipeline points the
+**8. Verification runs against the executed worktree.** When composed, the pipeline points the
 checks at the tree the runtime produced, not the factory's checkout; a runtime that reports no
 worktree blocks rather than falling back. See [docs/cli.md](cli.md).
 

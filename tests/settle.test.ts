@@ -74,6 +74,29 @@ function runtimeWritingAfterPrompt(delayMs: number, body?: (path: string) => voi
         worktree = worktreePath;
         return { ...workspace, worktreePath };
       },
+      attestIsolation: async (request) => {
+        const worktreePath = request.workspace.worktreePath;
+        return worktreePath === undefined
+          ? {
+              runtime: "settle-runtime",
+              level: "none" as const,
+              workUnitId: request.workUnit.id,
+              workspaceId: request.workspace.id,
+              repositoryRoot: request.repositoryRoot,
+              agentCwd: request.repositoryRoot,
+              observedAt: request.observedAt,
+            }
+          : {
+              runtime: "settle-runtime",
+              level: "git_worktree" as const,
+              workUnitId: request.workUnit.id,
+              workspaceId: request.workspace.id,
+              repositoryRoot: request.repositoryRoot,
+              worktreePath,
+              agentCwd: worktreePath,
+              observedAt: request.observedAt,
+            };
+      },
       startAgent: async () => ({ id: "agent", runtimeId: "agent" }),
       promptAgent: async () => {
         // The agent keeps working after the runtime reports the prompt resolved.

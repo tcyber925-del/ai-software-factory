@@ -416,21 +416,21 @@ async function runOne(
   const runId = `run-${workUnit.id}-${randomUUID().slice(0, 8)}`;
 
   /**
-   * Security gate — evaluated *before* anything is dispatched.
+   * Pre-dispatch policy screen.
    *
-   * Ordering is the whole point. A refusal after the runtime has been invoked and a
-   * worktree created would be a refusal of the consequences, not of the work.
+   * Ordering is the whole point: branch, credential, dangerous-operation and
+   * risk-class checks run before a workspace exists. Isolation is deliberately
+   * *not* decided here — there is nothing to attest until the worktree exists and
+   * the runtime can report where the agent will actually run. That final
+   * admission happens inside `executeWorkUnit`, immediately before `startAgent`.
    *
-   * `providedIsolation` is `git_worktree` because that is what the dispatch path
-   * provides: `executeWorkUnit` creates a worktree before it starts an agent and
-   * refuses to start one without. Passing `none` here would be the tempting mistake
-   * — `adequate` would be false for *every* Work Unit, including trusted ones, and
-   * the gate would refuse all work rather than the risky work.
+   * Sandbox-required work is refused at this screen because no configured runtime
+   * provides a sandbox. Creating a workspace first would be refusing the
+   * consequences of dispatch rather than the work.
    */
   const admission = evaluateSecurityGate({
     workUnitId: workUnit.id,
     risk: risk ?? {},
-    providedIsolation: "git_worktree",
     targetBranch: workUnit.baseRevision ?? "HEAD",
     writeMode: "pull_request",
   });
@@ -448,6 +448,8 @@ async function runOne(
   const base = {
     schema,
     runtimes,
+    risk: risk ?? {},
+    repositoryRoot: cwd,
     ...(eventLog === undefined ? {} : { eventLog }),
     runId,
     id,
@@ -549,6 +551,21 @@ async function runOne(
         } as LoggableEvent,
       ]);
       return blockedWithoutVerification(workUnit, execution, describeContainmentBreach(earlyBreach));
+    }
+
+    /**
+     * A blocked execution never started an agent, so there is no work to settle,
+     * verify, repair, or integrate. Short-circuiting here is what keeps a refused
+     * isolation admission from being reported as a verification failure — or
+     * worse, as a pass — elsewhere in the pipeline.
+     */
+    if (execution.status === "blocked") {
+      const refusal = execution.isolation?.reason ?? execution.failure ?? "execution was blocked";
+      return blockedWithoutVerification(
+        workUnit,
+        execution,
+        `execution did not start: ${refusal}`,
+      );
     }
 
     /**
@@ -745,16 +762,16 @@ async function runOne(
     });
 
     // Outcome is derived from the integration record — never from runtime status.
+    // A blocked execution short-circuits before this point, so `execution.status`
+    // here is "completed" or "failed".
     const outcome: UnitOutcome =
       integrationOutcome.result.state === "ready"
         ? "ready"
-        : execution.status === "blocked"
-          ? "blocked"
-          : execution.status === "failed"
-            ? "failed"
-            : repairAttempts !== undefined && repairReason?.startsWith("repair_limit_reached") === true
-              ? "repair_exhausted"
-              : "blocked";
+        : execution.status === "failed"
+          ? "failed"
+          : repairAttempts !== undefined && repairReason?.startsWith("repair_limit_reached") === true
+            ? "repair_exhausted"
+            : "blocked";
 
     const run: UnitRun = {
       workUnitId: workUnit.id,

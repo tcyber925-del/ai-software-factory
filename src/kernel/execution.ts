@@ -13,6 +13,9 @@ import type { JsonSchema } from "./json-schema.js";
 import type { LabelledRuntime } from "./work-unit.js";
 import type { EventLog, LoggableEvent } from "../state/event-log.js";
 import { selectRuntime, validateWorkUnit } from "./work-unit.js";
+import type { ExecutionRiskInput, IsolationAdmission } from "../security/risk.js";
+import { admitExecution } from "../security/risk.js";
+import { isolationSecurityDecision, persistSecurityDecision } from "../security/index.js";
 
 /**
  * The first end-to-end execution slice.
@@ -29,7 +32,11 @@ import { selectRuntime, validateWorkUnit } from "./work-unit.js";
  */
 
 export type ExecutionStatus = "completed" | "failed" | "blocked";
-export type ExecutionFailure = RuntimeFailure | "work_unit_invalid" | "no_capable_runtime";
+export type ExecutionFailure =
+  | RuntimeFailure
+  | "work_unit_invalid"
+  | "no_capable_runtime"
+  | "isolation_unattested";
 
 export interface ExecutionRecord {
   workUnitId: string;
@@ -42,6 +49,8 @@ export interface ExecutionRecord {
   /** Runtime-reported status. Operational evidence only, never proof of correctness. */
   runtimeStatus?: string;
   runtimeEvidence?: RuntimeEvidence;
+  /** The isolation admission decision made immediately before `startAgent`. */
+  isolation?: IsolationAdmission;
   failure?: ExecutionFailure;
 }
 
@@ -78,6 +87,13 @@ export interface ExecuteWorkUnitOptions {
   /** Injected for deterministic tests. */
   id?: () => string;
   now?: () => string;
+  /** Risk signals used for isolation admission. Omitted means trusted. */
+  risk?: ExecutionRiskInput;
+  /**
+   * The main checkout the worktree belongs to, checked against the runtime's
+   * attestation. Defaults to the process cwd.
+   */
+  repositoryRoot?: string;
 }
 
 export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<ExecutionRecord> {
@@ -150,6 +166,58 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
     emit("worktree.created", { worktreePath: worktree.worktreePath ?? null, baseRevision: revision });
     await persist("worktree.created", { worktreePath: worktree.worktreePath ?? null, baseRevision: revision });
 
+    /**
+     * Admission happens here, not at the pre-dispatch screen.
+     *
+     * The worktree now exists, so the runtime can attest to the isolation the
+     * agent will actually have. A failure of the attestation *request* is
+     * evidence to refuse, not a runtime failure to retry: the agent has not
+     * started and no work has been done.
+     */
+    const observedAt = now();
+    const repositoryRoot = options.repositoryRoot ?? process.cwd();
+    let attested: unknown;
+    let observationError: string | undefined;
+    try {
+      attested = await runtime.attestIsolation({ workUnit, workspace: worktree, repositoryRoot, observedAt });
+    } catch (error) {
+      observationError = messageOf(error);
+      attested = undefined;
+    }
+
+    const isolation = admitExecution(workUnit, options.risk ?? {}, attested, {
+      runtime: chosen.name,
+      workUnitId: workUnit.id,
+      workspaceId: worktree.id,
+      repositoryRoot,
+      now: observedAt,
+      ...(worktree.worktreePath === undefined ? {} : { worktreePath: worktree.worktreePath }),
+      ...(observationError === undefined ? {} : { observationError }),
+    });
+
+    await persistSecurityDecision(isolationSecurityDecision(workUnit.id, isolation, chosen.name), {
+      workUnitId: workUnit.id,
+      runId,
+      id,
+      now,
+      ...(log === undefined ? {} : { eventLog: log }),
+      ...(parentRunId === undefined ? {} : { parentRunId }),
+    });
+
+    if (!isolation.admitted) {
+      const record: ExecutionRecord = {
+        workUnitId: workUnit.id,
+        status: "blocked",
+        events,
+        runtime: chosen.name,
+        isolation,
+        failure: "isolation_unattested",
+      };
+      assignOptional(record, "workspaceId", worktree.id);
+      assignOptional(record, "worktreePath", worktree.worktreePath);
+      return record;
+    }
+
     agent = await runtime.startAgent(worktree, worker);
     emit("worker.started", { runtime: chosen.name, agentId: agent.id, workerId: worker.id });
     await persist("worker.started", { runtime: chosen.name, agentId: agent.id, workerId: worker.id });
@@ -186,6 +254,7 @@ export async function executeWorkUnit(options: ExecuteWorkUnitOptions): Promise<
       agentId: agent.id,
       runtimeStatus,
       runtimeEvidence,
+      isolation,
     };
     assignOptional(record, "workspaceId", workspace.id);
     assignOptional(record, "worktreePath", workspace.worktreePath);

@@ -37,7 +37,7 @@ export interface RepairContext {
   failedChecks: VerificationCheck[];
 }
 
-export type RepairAttemptOutcome = "repaired" | "still_failing";
+export type RepairAttemptOutcome = "repaired" | "still_failing" | "blocked";
 
 export interface RepairAttempt {
   attempt: number;
@@ -170,6 +170,36 @@ export async function runRepairLoop(options: RunRepairLoopOptions): Promise<Repa
     });
 
     const execution = await execute(prompt, attempt);
+
+    /**
+     * A blocked execution never started an agent. Verifying now would inspect an
+     * unexecuted tree and could report a failure (or a pass) for work that was
+     * never attempted. Stop the loop instead of spending the remaining budget on
+     * a fault that re-dispatching cannot fix.
+     */
+    if (execution.status === "blocked") {
+      const blocked: VerificationResult = {
+        workUnitId: workUnit.id,
+        status: "blocked",
+        checks: [],
+        attempt,
+      };
+      attempts.push({ attempt, prompt, execution, verification: blocked, outcome: "blocked" });
+      await persist("repair.blocked", {
+        attempt,
+        failure: execution.failure ?? "blocked",
+        reason: execution.isolation?.reason ?? execution.failure ?? "execution blocked before an agent started",
+      });
+      return {
+        workUnitId: workUnit.id,
+        status: "escalated",
+        attempts,
+        finalVerification: blocked,
+        reason: `repair_blocked_before_verification:${execution.failure ?? "blocked"}`,
+        events,
+      };
+    }
+
     // Verification is re-run independently. The execution result is recorded for
     // traceability but is deliberately not consulted for the outcome.
     const verification = await verify(attempt);

@@ -290,3 +290,44 @@ async function runShellLikeRepair(log: InMemoryEventLog) {
     ...clock(),
   });
 }
+it("stops before verification when a repair execution is blocked", async () => {
+  let verified = 0;
+  const result = await runRepairLoop({
+    workUnit,
+    initialVerification: {
+      workUnitId: workUnit.id,
+      status: "failed",
+      checks: [{ name: "lint", status: "failed", evidence: "nope" }],
+    },
+    execute: async () =>
+      ({
+        workUnitId: workUnit.id,
+        status: "blocked",
+        events: [],
+        failure: "isolation_unattested",
+        isolation: {
+          admitted: false,
+          assessment: { risk: "trusted", reasons: [], minimumIsolation: "git_worktree" },
+          attestation: {
+            ok: false,
+            outcome: "malformed",
+            requiredLevel: "git_worktree",
+            runtime: "stub",
+            problems: ["attestation_malformed"],
+            reason: "attestation malformed",
+          },
+          reason: "blocked",
+        },
+      }) as never,
+    verify: async () => {
+      verified += 1;
+      return { workUnitId: workUnit.id, status: "passed", checks: [] };
+    },
+  });
+
+  expect(verified).toBe(0);
+  expect(result.status).toBe("escalated");
+  expect(result.reason).toMatch(/repair_blocked_before_verification/);
+  expect(result.attempts[0]?.outcome).toBe("blocked");
+  expect(result.events.map((e) => e.type)).toContain("repair.blocked");
+});

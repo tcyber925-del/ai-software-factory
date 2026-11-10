@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
   AgentRef,
+  IsolationAttestation,
+  IsolationAttestationRequest,
   RuntimeEvidence,
   RuntimeFailure,
   RuntimeHealth,
@@ -121,6 +123,27 @@ export class HermesRuntime implements WorkerRuntime {
     this.#workspaces.set(workspace.id, worktree);
     if (baseRevision !== undefined) this.#workUnitIds.set(workspace.id, this.#workUnitIds.get(workspace.id) ?? "unknown");
     return worktree;
+  }
+
+  /**
+   * Hermes attests `none`.
+   *
+   * `promptAgent` runs the Hermes process in the workspace path, which is the
+   * repository root. `--worktree` asks Hermes to create its own worktree, but
+   * the factory neither names that path nor can observe it, so claiming a
+   * worktree would be an unverified label. Until that is verified, work that
+   * requires a worktree must be refused before the agent starts.
+   */
+  async attestIsolation(request: IsolationAttestationRequest): Promise<IsolationAttestation> {
+    return {
+      runtime: "hermes",
+      level: "none",
+      workUnitId: this.#workUnitIds.get(request.workspace.id) ?? request.workUnit.id,
+      workspaceId: request.workspace.id,
+      repositoryRoot: this.#repositoryRoot,
+      agentCwd: this.#repositoryRoot,
+      observedAt: request.observedAt,
+    };
   }
 
   async startAgent(workspace: WorkspaceRef, worker: Worker): Promise<AgentRef> {

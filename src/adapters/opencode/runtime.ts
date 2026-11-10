@@ -1,7 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentRef, RuntimeEvidence, RuntimeFailure, RuntimeHealth, WorkUnit, Worker, WorkerRuntime, WorkspaceRef } from "../../protocol.js";
+import type { AgentRef, IsolationAttestation, IsolationAttestationRequest, RuntimeEvidence, RuntimeFailure, RuntimeHealth, WorkUnit, Worker, WorkerRuntime, WorkspaceRef } from "../../protocol.js";
 import type { CommandRunner } from "./process.js";
 import { defaultCommandRunner } from "./process.js";
 
@@ -37,8 +37,40 @@ export class OpenCodeRuntime implements WorkerRuntime {
     try { await this.#runner.run("git", args, this.#repositoryRoot); } catch (error) { throw this.#runtimeError("workspace_failed", error); }
     const updated = { ...workspace, worktreePath }; this.#workspaces.set(workspace.id, updated); return updated;
   }
-  async startAgent(workspace: WorkspaceRef, worker: Worker): Promise<AgentRef> { if (!workspace.worktreePath) throw new Error("OpenCode runtime requires a worktree before starting an agent"); const id = `opencode-agent-${randomUUID()}`; this.#agents.set(id, { workUnitId: this.#workUnitIds.get(workspace.id) ?? "unknown", workspace, worker, status: "created", events: [] }); return { id, runtimeId: id }; }
-  async promptAgent(agent: AgentRef, prompt: string): Promise<void> {
+  /**
+   * Attests the directory `promptAgent` will actually run the agent in.
+   *
+   * It is read from this runtime's own workspace state, not echoed from the
+   * request: if the factory and the runtime disagree about the worktree, the
+   * mismatch must be visible to admission rather than papered over.
+   */
+  async attestIsolation(request: IsolationAttestationRequest): Promise<IsolationAttestation> {
+    const known = this.#workspaces.get(request.workspace.id);
+    const workUnitId = this.#workUnitIds.get(request.workspace.id) ?? request.workUnit.id;
+    const worktreePath = known?.worktreePath;
+    if (worktreePath === undefined) {
+      return {
+        runtime: "opencode",
+        level: "none",
+        workUnitId,
+        workspaceId: request.workspace.id,
+        repositoryRoot: this.#repositoryRoot,
+        agentCwd: this.#repositoryRoot,
+        observedAt: request.observedAt,
+      };
+    }
+    return {
+      runtime: "opencode",
+      level: "git_worktree",
+      workUnitId,
+      workspaceId: request.workspace.id,
+      repositoryRoot: this.#repositoryRoot,
+      worktreePath,
+      agentCwd: worktreePath,
+      observedAt: request.observedAt,
+    };
+  }
+  async startAgent(workspace: WorkspaceRef, worker: Worker): Promise<AgentRef> { if (!workspace.worktreePath) throw new Error("OpenCode runtime requires a worktree before starting an agent"); const id = `opencode-agent-${randomUUID()}`; this.#agents.set(id, { workUnitId: this.#workUnitIds.get(workspace.id) ?? "unknown", workspace, worker, status: "created", events: [] }); return { id, runtimeId: id }; }  async promptAgent(agent: AgentRef, prompt: string): Promise<void> {
     if (!prompt.trim()) throw new Error("prompt must not be empty"); const state = this.#agents.get(agent.id); if (!state) throw new Error("unknown OpenCode agent");
     state.status = "running"; state.events.push(this.#event(agent, "prompt.started", { prompt }));
     try { await this.#runner.run(this.#command, ["run", "--format", "json", prompt], state.workspace.worktreePath!, { timeoutMs: this.#promptTimeoutMs }); state.status = "idle"; state.events.push(this.#event(agent, "prompt.completed", { timeoutMs: this.#promptTimeoutMs })); }

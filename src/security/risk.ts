@@ -1,4 +1,9 @@
-import type { WorkUnit } from "../protocol.js";
+import type { IsolationLevel, WorkUnit } from "../protocol.js";
+import { verifyIsolationAttestation } from "./attestation.js";
+import type { AttestationDecision } from "./attestation.js";
+
+export type { IsolationLevel } from "../protocol.js";
+export { isolationStrength } from "./attestation.js";
 
 /**
  * Execution risk classification and minimum isolation policy.
@@ -21,8 +26,6 @@ import type { WorkUnit } from "../protocol.js";
  */
 export type RiskClass = "trusted" | "untrusted" | "destructive";
 
-export type IsolationLevel = "none" | "git_worktree" | "sandbox";
-
 export interface ExecutionRiskInput {
   /** Does the Work Unit consume content the factory did not author? */
   consumesUntrustedContent?: boolean;
@@ -39,20 +42,6 @@ export interface RiskAssessment {
   reasons: string[];
   /** The weakest isolation this Work Unit may run in. */
   minimumIsolation: IsolationLevel;
-  /** Isolation actually offered by the execution path. */
-  providedIsolation: IsolationLevel;
-  adequate: boolean;
-}
-
-const ISOLATION_STRENGTH: Record<IsolationLevel, number> = {
-  none: 0,
-  git_worktree: 1,
-  sandbox: 2,
-};
-
-/** A plain worktree isolates files. Only a sandbox isolates privileges. */
-export function isolationStrength(level: IsolationLevel): number {
-  return ISOLATION_STRENGTH[level];
 }
 
 /**
@@ -94,8 +83,6 @@ export function assessExecutionRisk(workUnit: WorkUnit, input: ExecutionRiskInpu
     risk,
     reasons,
     minimumIsolation: minimumIsolationFor(risk),
-    providedIsolation: "none",
-    adequate: false,
   };
 }
 
@@ -124,33 +111,61 @@ function severity(risk: RiskClass): number {
   }
 }
 
+/** What admission expects the runtime's evidence to be bound to. */
+export interface IsolationExpectation {
+  runtime: string;
+  workUnitId: string;
+  workspaceId: string;
+  worktreePath?: string;
+  repositoryRoot: string;
+  now: string;
+  maxAgeMs?: number;
+  futureSkewMs?: number;
+  observationError?: string;
+}
+
+export interface IsolationAdmission {
+  admitted: boolean;
+  assessment: RiskAssessment;
+  attestation: AttestationDecision;
+  reason: string;
+}
+
 /**
- * Final admission decision. An inadequate isolation level BLOCKS the Work Unit —
- * it does not warn, and it does not silently downgrade the risk class.
+ * Final isolation admission. An inadequate, absent, stale, malformed, or
+ * mismatched attestation BLOCKS the Work Unit — it does not warn, and it does
+ * not silently downgrade the risk class.
+ *
+ * The level is read from the attestation, never from an argument. A caller
+ * cannot obtain admission by passing `"git_worktree"`; that value is not an
+ * attestation and fails shape validation.
  */
 export function admitExecution(
   workUnit: WorkUnit,
   input: ExecutionRiskInput,
-  providedIsolation: IsolationLevel,
-): { admitted: boolean; assessment: RiskAssessment; reason: string } {
+  attestation: unknown,
+  expected: IsolationExpectation,
+): IsolationAdmission {
   const assessment = assessExecutionRisk(workUnit, input);
-  const adequate = isolationStrength(providedIsolation) >= isolationStrength(assessment.minimumIsolation);
-  const decided: RiskAssessment = { ...assessment, providedIsolation, adequate };
+  const decision = verifyIsolationAttestation(attestation, {
+    ...expected,
+    requiredLevel: assessment.minimumIsolation,
+  });
 
-  if (adequate) {
+  if (decision.ok) {
     return {
       admitted: true,
-      assessment: decided,
-      reason: `${decided.risk} work admitted in ${providedIsolation}`,
+      assessment,
+      attestation: decision,
+      reason: `${assessment.risk} work admitted with ${decision.providedLevel} attested by ${expected.runtime}`,
     };
   }
 
   return {
     admitted: false,
-    assessment: decided,
-    reason:
-      `${decided.risk} work requires ${decided.minimumIsolation} but only ${providedIsolation} is available; ` +
-      `a git worktree isolates files, not privileges`,
+    assessment,
+    attestation: decision,
+    reason: `${assessment.risk} work requires ${assessment.minimumIsolation}; ${decision.reason}`,
   };
 }
 

@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkUnit, Worker } from "../src/protocol.js";
+import type { JsonSchema } from "../src/kernel/json-schema.js";
+import { executeWorkUnit } from "../src/kernel/execution.js";
 import type { HermesCommandResult, HermesCommandRunner } from "../src/adapters/hermes/process.js";
 import { HermesRuntime } from "../src/adapters/hermes/runtime.js";
 
@@ -296,5 +299,80 @@ describe("Hermes does not displace the direct runtime", () => {
     // Nothing in the runtime module requires the hermes binary to exist; the
     // injected runner is the only entry point.
     expect(typeof HermesRuntime).toBe("function");
+  });
+});
+describe("Hermes isolation attestation is honest about where the agent runs", () => {
+  const schema = JSON.parse(readFileSync("schemas/work-unit.schema.json", "utf8")) as JsonSchema;
+  const observedAt = "2026-11-09T12:00:00.000Z";
+
+  it("attests none with the agent cwd at the repository root", async () => {
+    const { runner } = recordingRunner();
+    const runtime = new HermesRuntime({ commandRunner: runner, repositoryRoot: "/repo" });
+    const workspace = await runtime.createWorkspace(workUnit);
+    const worktree = await runtime.createWorktree(workspace, "HEAD");
+
+    const attestation = await runtime.attestIsolation({
+      workUnit,
+      workspace: worktree,
+      repositoryRoot: "/repo",
+      observedAt,
+    });
+
+    expect(attestation).toMatchObject({
+      runtime: "hermes",
+      level: "none",
+      workUnitId: workUnit.id,
+      workspaceId: workspace.id,
+      repositoryRoot: "/repo",
+      agentCwd: "/repo",
+    });
+    // No worktree claim, even though createWorktree recorded a pseudo path.
+    expect(attestation.worktreePath).toBeUndefined();
+  });
+
+  it("still attests none when Hermes is asked to manage a worktree", async () => {
+    const { runner } = recordingRunner();
+    const runtime = new HermesRuntime({
+      commandRunner: runner,
+      repositoryRoot: "/repo",
+      useHermesWorktree: true,
+    });
+    const workspace = await runtime.createWorkspace(workUnit);
+    const worktree = await runtime.createWorktree(workspace, "HEAD");
+
+    // `--worktree` may create a tree inside Hermes, but the factory cannot name
+    // or observe it, so it is not evidence of isolation.
+    expect(worktree.worktreePath).toMatch(/^hermes:worktree/);
+    const attestation = await runtime.attestIsolation({
+      workUnit,
+      workspace: worktree,
+      repositoryRoot: "/repo",
+      observedAt,
+    });
+    expect(attestation.level).toBe("none");
+    expect(attestation.agentCwd).toBe("/repo");
+  });
+
+  it("is refused before startAgent for work that requires a worktree", async () => {
+    const { runner } = recordingRunner();
+    const runtime = new HermesRuntime({ commandRunner: runner, repositoryRoot: "/repo" });
+    const startAgent = vi.spyOn(runtime, "startAgent");
+
+    const record = await executeWorkUnit({
+      workUnit,
+      worker,
+      runtimes: [{ name: "hermes", runtime }],
+      prompt: "implement",
+      schema,
+      repositoryRoot: "/repo",
+    });
+
+    expect(record.status).toBe("blocked");
+    expect(record.failure).toBe("isolation_unattested");
+    expect(record.isolation?.attestation.outcome).toBe("insufficient");
+    expect(record.isolation?.attestation.providedLevel).toBe("none");
+    expect(startAgent).not.toHaveBeenCalled();
+    expect(record.events.map((event) => event.type)).not.toContain("worker.started");
+    expect(record.events.map((event) => event.type)).not.toContain("worker.prompted");
   });
 });

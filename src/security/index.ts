@@ -5,10 +5,10 @@ import type {
   BranchWriteDecision,
   CredentialDecision,
   ExecutionRiskInput,
-  IsolationLevel,
+  IsolationAdmission,
   RiskAssessment,
 } from "./risk.js";
-import { admitExecution, detectDangerousOperations, evaluateBranchWrite, evaluateCredentialAccess } from "./risk.js";
+import { assessExecutionRisk, detectDangerousOperations, evaluateBranchWrite, evaluateCredentialAccess } from "./risk.js";
 
 /**
  * The factory's security decision record.
@@ -18,7 +18,7 @@ import { admitExecution, detectDangerousOperations, evaluateBranchWrite, evaluat
  * A decision that is only logged in a terminal is not auditable.
  */
 
-export type SecurityDecisionKind = "execution_admitted" | "execution_blocked" | "branch_write" | "credential_access" | "dangerous_operation";
+export type SecurityDecisionKind = "execution_admitted" | "execution_blocked" | "dispatch_screened" | "branch_write" | "credential_access" | "dangerous_operation";
 
 export interface SecurityDecisionRecord {
   kind: SecurityDecisionKind;
@@ -32,6 +32,8 @@ export interface RecordSecurityDecisionOptions {
   workUnitId: string;
   eventLog?: EventLog;
   runId?: string;
+  /** Set when this decision belongs to an attempt spawned by another run, e.g. repair. */
+  parentRunId?: string;
   id?: () => string;
   now?: () => string;
 }
@@ -68,27 +70,34 @@ export async function persistSecurityDecision(
 ): Promise<SecurityDecisionOutcome> {
   const outcome = recordSecurityDecision(decision, options);
   if (options.eventLog !== undefined) {
-    await options.eventLog.append([
-      {
-        workUnitId: options.workUnitId,
-        runId: options.runId ?? outcome.record.kind,
-        source: "factory",
-        type: decision.allowed ? "security.allowed" : "security.blocked",
-        payload: { kind: decision.kind, allowed: decision.allowed, reason: decision.reason, ...decision.detail },
-      },
-    ]);
+    const entry = {
+      workUnitId: options.workUnitId,
+      runId: options.runId ?? outcome.record.kind,
+      source: "factory" as const,
+      type: decision.allowed ? "security.allowed" : "security.blocked",
+      payload: { kind: decision.kind, allowed: decision.allowed, reason: decision.reason, ...decision.detail },
+    };
+    await options.eventLog.append([options.parentRunId === undefined ? entry : { ...entry, parentRunId: options.parentRunId }]);
   }
   return outcome;
 }
 
 /**
- * One place where admission, branch-write, credential and dangerous-operation
- * checks are combined, so a caller cannot accidentally apply only some of them.
+ * The pre-dispatch policy screen.
+ *
+ * It classifies risk and applies branch-write, credential and dangerous-operation
+ * checks before a workspace exists. It deliberately does **not** admit execution:
+ * isolation admission happens after the worktree is created and consumes a typed
+ * attestation (`admitExecution`). There is no `providedIsolation` input because a
+ * caller-supplied level is not evidence.
+ *
+ * Sandbox-required work is refused here rather than creating a workspace for work
+ * no configured runtime can contain. That is a policy decision, not a claim that a
+ * worktree is a sandbox.
  */
 export interface SecurityGateInput {
   workUnitId: string;
   risk: ExecutionRiskInput;
-  providedIsolation: IsolationLevel;
   targetBranch: string;
   writeMode: "direct_push" | "pull_request";
   credentials?: { scope: "none" | "development" | "staging" | "production"; explicitlyRequired: boolean };
@@ -114,7 +123,7 @@ export function evaluateSecurityGate(input: SecurityGateInput): SecurityGateResu
     acceptanceCriteria: [],
   };
 
-  const admission = admitExecution(workUnit, input.risk, input.providedIsolation);
+  const assessment = assessExecutionRisk(workUnit, input.risk);
   const branch = evaluateBranchWrite(input.targetBranch, input.writeMode);
   const credentials =
     input.credentials === undefined ? undefined : evaluateCredentialAccess(input.credentials);
@@ -124,20 +133,28 @@ export function evaluateSecurityGate(input: SecurityGateInput): SecurityGateResu
   const decisions: SecurityDecisionRecord[] = [];
   const blockers: SecurityDecisionRecord[] = [];
 
-  const admitRecord: SecurityDecisionRecord = {
-    kind: admission.admitted ? "execution_admitted" : "execution_blocked",
+  const isolationBlocked = assessment.minimumIsolation === "sandbox";
+  const screenRecord: SecurityDecisionRecord = {
+    kind: isolationBlocked ? "execution_blocked" : "dispatch_screened",
     workUnitId: input.workUnitId,
-    allowed: admission.admitted,
-    reason: admission.reason,
+    allowed: !isolationBlocked,
+    reason: isolationBlocked
+      ? `${assessment.risk} work requires sandbox but no approved sandbox runtime is configured; ` +
+        "a git worktree isolates files, not privileges"
+      : `${assessment.risk} work requires ${assessment.minimumIsolation}; ` +
+        "runtime isolation attestation must pass before any agent starts",
     detail: {
-      risk: admission.assessment.risk,
-      reasons: admission.assessment.reasons,
-      minimumIsolation: admission.assessment.minimumIsolation,
-      providedIsolation: admission.assessment.providedIsolation,
+      risk: assessment.risk,
+      reasons: assessment.reasons,
+      requiredIsolation: assessment.minimumIsolation,
+      providedIsolation: null,
+      attestation: isolationBlocked ? "not_attempted" : "pending",
+      runtime: null,
+      stage: "pre_dispatch",
     },
   };
-  decisions.push(admitRecord);
-  if (!admitRecord.allowed) blockers.push(admitRecord);
+  decisions.push(screenRecord);
+  if (!screenRecord.allowed) blockers.push(screenRecord);
 
   const branchRecord: SecurityDecisionRecord = {
     kind: "branch_write",
@@ -176,7 +193,7 @@ export function evaluateSecurityGate(input: SecurityGateInput): SecurityGateResu
   const result: SecurityGateResult = {
     admitted: blockers.length === 0,
     blockers,
-    assessment: admission.assessment,
+    assessment,
     branch,
     dangerousOperations,
     decisions,
@@ -185,4 +202,36 @@ export function evaluateSecurityGate(input: SecurityGateInput): SecurityGateResu
   // an absent key is not the same as an explicit `undefined`.
   if (credentials !== undefined) result.credentials = credentials;
   return result;
+}
+
+/**
+ * Builds the durable decision for the pre-agent admission point.
+ *
+ * The detail is the audit record the issue requires: runtime identity,
+ * attestation outcome, required and provided levels, workspace identity, and the
+ * reason. It contains paths and levels, never credentials or environment values.
+ */
+export function isolationSecurityDecision(
+  workUnitId: string,
+  admission: IsolationAdmission,
+  runtime: string,
+): SecurityDecisionRecord {
+  const evidence = admission.attestation.evidence;
+  return {
+    kind: admission.admitted ? "execution_admitted" : "execution_blocked",
+    workUnitId,
+    allowed: admission.admitted,
+    reason: admission.reason,
+    detail: {
+      runtime,
+      attestation: admission.attestation.outcome,
+      requiredIsolation: admission.assessment.minimumIsolation,
+      providedIsolation: admission.attestation.providedLevel ?? null,
+      workspaceId: evidence?.workspaceId ?? null,
+      worktreePath: evidence?.worktreePath ?? null,
+      agentCwd: evidence?.agentCwd ?? null,
+      attestationProblems: admission.attestation.problems,
+      stage: "pre_agent",
+    },
+  };
 }

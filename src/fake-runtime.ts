@@ -1,13 +1,15 @@
-import type {AgentRef,ExecutionEvent,RuntimeEvidence,RuntimeHealth,Worker,WorkerRuntime,WorkUnit,WorkspaceRef} from "./protocol.js";
+import type {AgentRef,ExecutionEvent,IsolationAttestation,IsolationAttestationRequest,RuntimeEvidence,RuntimeHealth,Worker,WorkerRuntime,WorkUnit,WorkspaceRef} from "./protocol.js";
 
 export class FakeRuntime implements WorkerRuntime {
-  readonly name="fake";
-  private workspaceCounter=0;
-  private agentCounter=0;
-  private readonly statuses=new Map<string,"running"|"idle"|"exited">();
-  private readonly events:ExecutionEvent[]=[];
+  readonly name: string;
+  private workspaceCounter = 0;
+  private agentCounter = 0;
+  private readonly statuses = new Map<string, "running" | "idle" | "exited">();
+  private readonly events: ExecutionEvent[] = [];
 
-  constructor(private readonly exitAfterPrompt=false) {}
+  constructor(private readonly exitAfterPrompt = false, name = "fake") {
+    this.name = name;
+  }
 
   async capabilities():Promise<string[]> { return ["frontend","backend","browser","testing","documentation"]; }
   async health():Promise<RuntimeHealth> { return {available:true,runtime:this.name,version:"test"}; }
@@ -22,6 +24,26 @@ export class FakeRuntime implements WorkerRuntime {
     const worktree={...workspace,worktreePath:workspace.path+"/worktree"};
     this.record("runtime","worktree.created",{workspaceId:workspace.id,baseRevision});
     return worktree;
+  }
+
+  /**
+   * Test evidence bound to the request, mirroring what a conforming adapter
+   * does. It is structurally valid but says nothing about containment: tests
+   * that need forged or missing evidence inject their own runtime.
+   */
+  async attestIsolation(request:IsolationAttestationRequest):Promise<IsolationAttestation> {
+    const worktreePath=request.workspace.worktreePath;
+    const attestation:IsolationAttestation={
+      runtime:this.name,
+      level:worktreePath===undefined?"none":"git_worktree",
+      workUnitId:request.workUnit.id,
+      workspaceId:request.workspace.id,
+      repositoryRoot:request.repositoryRoot,
+      agentCwd:worktreePath ?? request.repositoryRoot,
+      observedAt:request.observedAt,
+    };
+    if(worktreePath!==undefined) attestation.worktreePath=worktreePath;
+    return attestation;
   }
 
   async startAgent(workspace:WorkspaceRef,worker:Worker):Promise<AgentRef> {
