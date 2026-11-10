@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import { HerdrRuntime } from "../src/adapters/herdr/runtime.js";
 import type { HerdrCommandRunner } from "../src/adapters/herdr/process.js";
 import type { WorkUnit, Worker } from "../src/protocol.js";
+import type { JsonSchema } from "../src/kernel/json-schema.js";
+import { executeWorkUnit } from "../src/kernel/execution.js";
 
 const workUnit: WorkUnit = {
   id: "wu-herdr",
@@ -112,5 +115,56 @@ describe("HerdrRuntime", () => {
     const status = await runtime.inspectAgent(agent);
     expect(status.status).toBe("idle");
     expect("verification" in status).toBe(false);
+  });
+});
+
+describe("Herdr isolation attestation is honest about where the agent runs", () => {
+  const schema = JSON.parse(readFileSync("schemas/work-unit.schema.json", "utf8")) as JsonSchema;
+  const observedAt = "2026-11-09T12:00:00.000Z";
+
+  it("attests none because the agent starts in the root pane, not the worktree", async () => {
+    const runtime = new HerdrRuntime({ repositoryRoot: "/repo", commandRunner: runnerFor(herdrResponse) });
+    const workspace = await runtime.createWorkspace(workUnit);
+    const worktree = await runtime.createWorktree(workspace, "HEAD");
+    expect(worktree.worktreePath).toBe("/repo/.worktree");
+
+    const attestation = await runtime.attestIsolation({
+      workUnit,
+      workspace: worktree,
+      repositoryRoot: "/repo",
+      observedAt,
+    });
+
+    expect(attestation).toMatchObject({
+      runtime: "herdr",
+      level: "none",
+      workUnitId: workUnit.id,
+      workspaceId: workspace.id,
+      repositoryRoot: "/repo",
+      agentCwd: "/repo",
+    });
+    expect(attestation.worktreePath).toBeUndefined();
+  });
+
+  it("is refused before startAgent for work that requires a worktree", async () => {
+    const runtime = new HerdrRuntime({ repositoryRoot: "/repo", commandRunner: runnerFor(herdrResponse) });
+    const startAgent = vi.spyOn(runtime, "startAgent");
+
+    const record = await executeWorkUnit({
+      workUnit,
+      worker: { ...worker, capabilities: ["coding"] },
+      runtimes: [{ name: "herdr", runtime }],
+      prompt: "implement",
+      schema,
+      repositoryRoot: "/repo",
+    });
+
+    expect(record.status).toBe("blocked");
+    expect(record.failure).toBe("isolation_unattested");
+    expect(record.isolation?.attestation.outcome).toBe("insufficient");
+    expect(record.isolation?.attestation.providedLevel).toBe("none");
+    expect(startAgent).not.toHaveBeenCalled();
+    expect(record.events.map((event) => event.type)).not.toContain("worker.started");
+    expect(record.events.map((event) => event.type)).not.toContain("worker.prompted");
   });
 });

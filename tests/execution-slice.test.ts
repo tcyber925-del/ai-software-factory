@@ -1,7 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { FakeRuntime } from "../src/fake-runtime.js";
-import type { RuntimeHealth, Worker, WorkerRuntime, WorkUnit, WorkspaceRef, AgentRef } from "../src/protocol.js";
+import type {
+  AgentRef,
+  IsolationAttestation,
+  IsolationAttestationRequest,
+  RuntimeHealth,
+  Worker,
+  WorkerRuntime,
+  WorkUnit,
+  WorkspaceRef,
+} from "../src/protocol.js";
 import type { JsonSchema } from "../src/kernel/json-schema.js";
 import { executeWorkUnit } from "../src/kernel/execution.js";
 import type { ExecutionRecord } from "../src/kernel/execution.js";
@@ -23,6 +32,25 @@ const workUnit: WorkUnit = {
 
 const worker: Worker = { id: "worker-fake", capabilities: ["testing"], runtime: "fake" };
 
+/** Valid evidence for the default stub, parameterised by the kernel request. */
+function attestationFor(
+  request: IsolationAttestationRequest,
+  overrides: Partial<IsolationAttestation> = {},
+): IsolationAttestation {
+  const path = request.workspace.worktreePath ?? request.repositoryRoot;
+  return {
+    runtime: "stub",
+    level: "git_worktree",
+    workUnitId: request.workUnit.id,
+    workspaceId: request.workspace.id,
+    repositoryRoot: request.repositoryRoot,
+    worktreePath: path,
+    agentCwd: path,
+    observedAt: request.observedAt,
+    ...overrides,
+  };
+}
+
 /**
  * A fully-formed runtime built from an object literal. Class instances cannot be
  * used for this: spreading one copies only own properties, not prototype methods.
@@ -34,6 +62,8 @@ function stubRuntime(overrides: Partial<WorkerRuntime> = {}): WorkerRuntime {
     createWorkspace: (): Promise<WorkspaceRef> => Promise.resolve({ id: "ws-1", path: "/tmp/ws-1" }),
     createWorktree: (workspace: WorkspaceRef): Promise<WorkspaceRef> =>
       Promise.resolve({ ...workspace, worktreePath: "/tmp/ws-1/wt" }),
+    attestIsolation: (request: IsolationAttestationRequest): Promise<IsolationAttestation> =>
+      Promise.resolve(attestationFor(request)),
     startAgent: (): Promise<AgentRef> => Promise.resolve({ id: "agent-1", runtimeId: "agent-1" }),
     promptAgent: (): Promise<void> => Promise.resolve(),
     waitAgent: () => Promise.resolve("idle"),
@@ -213,6 +243,88 @@ describe("end-to-end execution", () => {
     // Runtime failure does not erase the trace.
     expect(eventTypes(record)).toEqual(["work.validated", "runtime.failure"]);
     expect(record.events.at(-1)?.payload).toMatchObject({ failure: "workspace_failed" });
+  });
+});
+
+describe("an agent starts only after runtime isolation is attested", () => {
+  async function execute(runtime: WorkerRuntime): Promise<ExecutionRecord> {
+    return executeWorkUnit({
+      workUnit,
+      worker,
+      runtimes: [{ name: "stub", runtime }],
+      prompt: "implement",
+      schema: workUnitSchema,
+      ...deterministic(),
+    });
+  }
+
+  it("blocks before startAgent when the runtime produces no attestation", async () => {
+    const record = await execute(
+      stubRuntime({
+        attestIsolation: () => Promise.resolve(undefined as unknown as IsolationAttestation),
+      }),
+    );
+    expect(record.status).toBe("blocked");
+    expect(record.failure).toBe("isolation_unattested");
+    expect(record.isolation?.attestation.outcome).toBe("missing");
+    expect(eventTypes(record)).not.toContain("worker.started");
+    expect(eventTypes(record)).not.toContain("worker.prompted");
+  });
+
+  it("blocks the literal git_worktree label before startAgent", async () => {
+    const record = await execute(
+      stubRuntime({
+        attestIsolation: () => Promise.resolve("git_worktree" as unknown as IsolationAttestation),
+      }),
+    );
+    expect(record.status).toBe("blocked");
+    expect(record.isolation?.attestation.outcome).toBe("malformed");
+    expect(eventTypes(record)).not.toContain("worker.started");
+  });
+
+  it("blocks evidence for another workspace before startAgent", async () => {
+    const record = await execute(
+      stubRuntime({
+        attestIsolation: (request) =>
+          Promise.resolve(attestationFor(request, { workspaceId: "other-workspace" })),
+      }),
+    );
+    expect(record.status).toBe("blocked");
+    expect(record.isolation?.attestation.outcome).toBe("mismatched");
+    expect(record.isolation?.attestation.problems).toContain("workspace_mismatch");
+    expect(eventTypes(record)).not.toContain("worker.started");
+  });
+
+  it("blocks stale evidence before startAgent", async () => {
+    const record = await execute(
+      stubRuntime({
+        attestIsolation: (request) =>
+          Promise.resolve(attestationFor(request, { observedAt: "2025-01-01T00:00:00.000Z" })),
+      }),
+    );
+    expect(record.status).toBe("blocked");
+    expect(record.isolation?.attestation.outcome).toBe("stale");
+    expect(eventTypes(record)).not.toContain("worker.started");
+  });
+
+  it("starts the agent only after a matching attestation is verified", async () => {
+    let attested = false;
+    const record = await execute(
+      stubRuntime({
+        attestIsolation: (request) => {
+          attested = true;
+          return Promise.resolve(attestationFor(request));
+        },
+        startAgent: () => {
+          expect(attested).toBe(true);
+          return Promise.resolve({ id: "agent-1", runtimeId: "agent-1" });
+        },
+      }),
+    );
+    expect(record.status).toBe("completed");
+    expect(record.isolation?.admitted).toBe(true);
+    expect(record.isolation?.attestation.outcome).toBe("verified");
+    expect(eventTypes(record)).toContain("worker.started");
   });
 });
 

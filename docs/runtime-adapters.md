@@ -4,7 +4,7 @@
 Adapters isolate factory semantics from execution-provider details.
 
 ## The interface
-`WorkerRuntime` in `src/protocol.ts` is the whole contract. Ten methods, all camelCase:
+`WorkerRuntime` in `src/protocol.ts` is the whole contract. Eleven methods, all camelCase:
 
 | Method | Purpose |
 |---|---|
@@ -12,6 +12,7 @@ Adapters isolate factory semantics from execution-provider details.
 | `health()` | Availability and version |
 | `createWorkspace(workUnit)` | An isolated workspace for one Work Unit |
 | `createWorktree(workspace, baseRevision?)` | A Git worktree from a specific revision |
+| `attestIsolation(request)` | Typed, runtime-bound isolation evidence for that workspace; checked before `startAgent` |
 | `startAgent(workspace, worker)` | An agent identity bound to that workspace |
 | `promptAgent(agent, prompt)` | Deliver work |
 | `waitAgent(agent, timeoutMs)` | `"running"` \| `"idle"` \| `"exited"` — status only, never correctness |
@@ -21,7 +22,9 @@ Adapters isolate factory semantics from execution-provider details.
 
 The shape is deliberately small and deliberately says nothing about whether work succeeded. There
 is no method through which a runtime can report success, because a runtime does not own that
-judgement.
+judgement. `attestIsolation` reports where the agent will run and at what isolation level; admission
+validates that evidence and refuses before `startAgent` when it is absent, stale, malformed,
+mismatched, or insufficient. A caller-supplied isolation label is never accepted as evidence.
 
 ## Required behavior
 Every runtime adapter should expose equivalent factory-level semantics for:
@@ -34,16 +37,18 @@ Every runtime adapter should expose equivalent factory-level semantics for:
 
 ## Shipped adapters
 
-| Adapter | Kind | Notes |
-|---|---|---|
-| `fake` | Test double | Deterministic; the default in tests and always available to the CLI |
-| `opencode` | Direct | Runs OpenCode without a managed terminal runtime |
-| `herdr` | Managed | Uses Herdr as an execution/workspace substrate |
-| `hermes` | Managed | Optional agent-native orchestration; see [hermes-adapter.md](hermes-adapter.md) |
+| Adapter | Kind | Isolation attestation | Notes |
+|---|---|---|---|
+| `fake` | Test double | Request-bound `git_worktree` in tests; overridable | Deterministic; the default in tests and always available to the CLI |
+| `opencode` | Direct | `git_worktree` at the created worktree when conformance holds | Runs OpenCode without a managed terminal runtime; subprocess cwd is conformance-tested |
+| `herdr` | Managed | `none` (agent starts in repository-root pane) | Creates a worktree path but does not run the agent in it; refused for worktree-required work |
+| `hermes` | Managed | `none` (agent runs from repository root) | Optional orchestration; internal `--worktree` is not factory-observable evidence; refused for worktree-required work |
 
-Herdr and Hermes are preferred supported runtimes, not mandatory factory dependencies. The CLI
-offers a runtime only when its binary is on `PATH`, and reports an unknown runtime name as an error
-rather than silently substituting another.
+Herdr and Hermes remain supported runtimes in code, but their honest attestation means the security
+gate refuses them for trusted work that requires a verified worktree. The CLI/runtime selection and
+interim dispatch policy still govern when they may be offered. The CLI offers a runtime only when its
+binary is on `PATH`, and reports an unknown runtime name as an error rather than silently
+substituting another.
 
 ### Doctor coverage is not the same as the runtime list
 

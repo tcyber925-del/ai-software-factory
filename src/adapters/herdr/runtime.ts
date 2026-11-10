@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
   AgentRef,
+  IsolationAttestation,
+  IsolationAttestationRequest,
   RuntimeEvidence,
   RuntimeFailure,
   RuntimeHealth,
@@ -119,6 +121,27 @@ export class HerdrRuntime implements WorkerRuntime {
     } catch (error) {
       throw this.#runtimeError("workspace_failed", error);
     }
+  }
+
+  /**
+   * Herdr attests `none`.
+   *
+   * A worktree is created, but `startAgent` launches the agent in the
+   * workspace's *root pane* (`workspace create --cwd <repositoryRoot>`), not in
+   * that worktree. Reporting `git_worktree` here would be exactly the
+   * caller-supplied-label defect this contract exists to remove, so the
+   * attestation states where the agent actually runs.
+   */
+  async attestIsolation(request: IsolationAttestationRequest): Promise<IsolationAttestation> {
+    return {
+      runtime: "herdr",
+      level: "none",
+      workUnitId: this.#workUnitIds.get(request.workspace.id) ?? request.workUnit.id,
+      workspaceId: request.workspace.id,
+      repositoryRoot: this.#repositoryRoot,
+      agentCwd: this.#repositoryRoot,
+      observedAt: request.observedAt,
+    };
   }
 
   async startAgent(workspace: WorkspaceRef, worker: Worker): Promise<AgentRef> {

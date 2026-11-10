@@ -299,7 +299,7 @@ describe("verification runs against the executed worktree, not the factory check
   it("blocks rather than falling back when the runtime reports no worktree", async () => {
     // Object.create keeps FakeRuntime's prototype methods; an object spread would
     // drop them and this would silently test something else.
-    const base = new FakeRuntime();
+    const base = new FakeRuntime(false, "no-worktree");
     const noWorktree: LabelledRuntime = {
       name: "no-worktree",
       runtime: Object.assign(Object.create(base), {
@@ -313,7 +313,7 @@ describe("verification runs against the executed worktree, not the factory check
       runtimes: [noWorktree],
       checks,
       cwd: "/factory/checkout",
-      // Green everywhere, so only the missing worktree can explain a block.
+      // Green everywhere, so only the missing isolation evidence can explain a block.
       runner: passing,
       ...clock(),
     });
@@ -321,8 +321,11 @@ describe("verification runs against the executed worktree, not the factory check
     expect(result.status).toBe("blocked");
     expect(result.runs[0]?.outcome).toBe("blocked");
     expect(result.runs[0]?.integration.state).toBe("blocked");
-    expect(result.runs[0]?.integration.reason).toMatch(/nothing to verify/);
-    expect(result.runs[0]?.integration.reason).toMatch(/refusing to fall back/);
+    // Caught at admission, before any agent starts — stronger than the old
+    // "nothing to verify" fallback guard, which is now defense in depth.
+    expect(result.runs[0]?.execution.failure).toBe("isolation_unattested");
+    expect(result.runs[0]?.execution.isolation?.attestation.outcome).toBe("insufficient");
+    expect(result.runs[0]?.integration.reason).toMatch(/execution did not start/);
   });
 });
 
@@ -604,7 +607,7 @@ describe("repair is not spent on a runtime that failed to run", () => {
     const state = { prompts: 0, worktrees: 0 };
     const runtime: LabelledRuntime = {
       name: "failing-runtime",
-      runtime: Object.assign(Object.create(new FakeRuntime()), {
+      runtime: Object.assign(Object.create(new FakeRuntime(false, "failing-runtime")), {
         promptAgent(agentRef: AgentRef, prompt: string) {
           state.prompts += 1;
           void agentRef;
@@ -646,7 +649,7 @@ describe("repair is not spent on a runtime that failed to run", () => {
     let prompts = 0;
     const runtime: LabelledRuntime = {
       name: "completing",
-      runtime: Object.assign(Object.create(new FakeRuntime()), {
+      runtime: Object.assign(Object.create(new FakeRuntime(false, "completing")), {
         promptAgent() {
           prompts += 1;
           return Promise.resolve();
@@ -783,6 +786,29 @@ describe("the executed worktree survives until verification has read it", () => 
         waitAgent: async () => "idle",
         inspectAgent: async () => ({ status: "idle" }),
         collectRuntimeEvidence: async () => ({ runtime: "worktree-runtime", workspaceId: "ws", agentId: "agent", events: [] }),
+        attestIsolation: async (request) => {
+          const worktreePath = request.workspace.worktreePath;
+          return worktreePath === undefined
+            ? {
+                runtime: "worktree-runtime",
+                level: "none" as const,
+                workUnitId: request.workUnit.id,
+                workspaceId: request.workspace.id,
+                repositoryRoot: request.repositoryRoot,
+                agentCwd: request.repositoryRoot,
+                observedAt: request.observedAt,
+              }
+            : {
+                runtime: "worktree-runtime",
+                level: "git_worktree" as const,
+                workUnitId: request.workUnit.id,
+                workspaceId: request.workspace.id,
+                repositoryRoot: request.repositoryRoot,
+                worktreePath,
+                agentCwd: worktreePath,
+                observedAt: request.observedAt,
+              };
+        },
         cleanupWorkspace: async (workspace: WorkspaceRef) => {
           if (workspace.worktreePath) rmSync(workspace.worktreePath, { recursive: true, force: true });
         },
@@ -904,6 +930,29 @@ describe("a scope violation reaches the integration gate through the pipeline", 
         waitAgent: async () => "idle",
         inspectAgent: async () => ({ status: "idle" }),
         collectRuntimeEvidence: async () => ({ runtime: "scoping-runtime", workspaceId: "ws", agentId: "agent", events: [] }),
+        attestIsolation: async (request) => {
+          const worktreePath = request.workspace.worktreePath;
+          return worktreePath === undefined
+            ? {
+                runtime: "scoping-runtime",
+                level: "none" as const,
+                workUnitId: request.workUnit.id,
+                workspaceId: request.workspace.id,
+                repositoryRoot: request.repositoryRoot,
+                agentCwd: request.repositoryRoot,
+                observedAt: request.observedAt,
+              }
+            : {
+                runtime: "scoping-runtime",
+                level: "git_worktree" as const,
+                workUnitId: request.workUnit.id,
+                workspaceId: request.workspace.id,
+                repositoryRoot: request.repositoryRoot,
+                worktreePath,
+                agentCwd: worktreePath,
+                observedAt: request.observedAt,
+              };
+        },
         cleanupWorkspace: async (workspace: WorkspaceRef) => {
           if (workspace.worktreePath) rmSync(workspace.worktreePath, { recursive: true, force: true });
         },
@@ -999,5 +1048,104 @@ describe("a scope violation reaches the integration gate through the pipeline", 
 
     expect(result.status).toBe("ready");
     expect(result.runs[0]?.scope).toBeUndefined();
+  });
+});
+
+describe("isolation attestation is enforced before any agent starts", () => {
+  function stubWithAttestation(
+    attestIsolation: import("../src/protocol.js").WorkerRuntime["attestIsolation"],
+  ): LabelledRuntime {
+    const base = new FakeRuntime(false, "stub");
+    return {
+      name: "stub",
+      runtime: Object.assign(Object.create(base), { attestIsolation }),
+    };
+  }
+
+  it("never reaches verification or integration.ready when attestation is invalid", async () => {
+    let verified = false;
+    const log = new InMemoryEventLog();
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [stubWithAttestation(async () => "git_worktree" as never)],
+      checks,
+      cwd: ".",
+      eventLog: log,
+      runner: {
+        async run() {
+          verified = true;
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+      },
+      ...clock(),
+    });
+
+    expect(verified).toBe(false);
+    expect(result.status).toBe("blocked");
+    expect(result.runs[0]?.outcome).toBe("blocked");
+    expect(result.runs[0]?.execution.failure).toBe("isolation_unattested");
+    expect(result.runs[0]?.integration.state).toBe("blocked");
+    expect(result.runs[0]?.integration.state).not.toBe("ready");
+    expect(log.stored().some((e) => e.type === "verification.started")).toBe(false);
+    expect(log.stored().some((e) => e.type === "integration.ready")).toBe(false);
+  });
+
+  it("refuses a runtime mismatch before start, so it cannot reach ready", async () => {
+    const result = await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [
+        stubWithAttestation(async (request) => ({
+          runtime: "impersonator",
+          level: "git_worktree" as const,
+          workUnitId: request.workUnit.id,
+          workspaceId: request.workspace.id,
+          repositoryRoot: request.repositoryRoot,
+          worktreePath: request.workspace.worktreePath!,
+          agentCwd: request.workspace.worktreePath!,
+          observedAt: request.observedAt,
+        })),
+      ],
+      checks,
+      cwd: ".",
+      runner: passing,
+      ...clock(),
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.runs[0]?.execution.isolation?.attestation.outcome).toBe("mismatched");
+    expect(result.runs[0]?.integration.state).not.toBe("ready");
+  });
+
+  it("records the attestation decision durably with no credential values", async () => {
+    const log = new InMemoryEventLog();
+    await runPipeline({
+      workUnits: [unit("W-1")],
+      schema,
+      runtimes: [runtime()],
+      checks,
+      cwd: ".",
+      eventLog: log,
+      runner: passing,
+      ...clock(),
+    });
+
+    const decision = log.stored().find((e) => e.type === "security.allowed" && e.payload["kind"] === "execution_admitted");
+    expect(decision).toBeDefined();
+    expect(decision?.payload).toMatchObject({
+      kind: "execution_admitted",
+      allowed: true,
+      runtime: "fake",
+      attestation: "verified",
+      requiredIsolation: "git_worktree",
+      providedIsolation: "git_worktree",
+      stage: "pre_agent",
+    });
+    expect(decision?.payload["workspaceId"]).toBeTruthy();
+    expect(decision?.payload["worktreePath"]).toBeTruthy();
+    expect(decision?.payload["reason"]).toBeTruthy();
+    // The record carries identity and outcome, never secrets.
+    expect(JSON.stringify(decision?.payload)).not.toMatch(/token|secret|password|credential_value|api_key/i);
   });
 });

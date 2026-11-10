@@ -58,6 +58,17 @@ function runtime(name: string, capabilities: string[]): LabelledRuntime {
     health: async (): Promise<RuntimeHealth> => ({ available: true, runtime: name }),
     createWorkspace: async (): Promise<WorkspaceRef> => ({ id: "ws", path: "/tmp/ws" }),
     createWorktree: async (workspace: WorkspaceRef): Promise<WorkspaceRef> => workspace,
+    // Selection tests never dispatch, but the contract requires evidence. This
+    // stub creates no worktree, so it honestly attests `none`.
+    attestIsolation: async (request) => ({
+      runtime: name,
+      level: "none",
+      workUnitId: request.workUnit.id,
+      workspaceId: request.workspace.id,
+      repositoryRoot: request.repositoryRoot,
+      agentCwd: request.repositoryRoot,
+      observedAt: request.observedAt,
+    }),
     startAgent: async (): Promise<AgentRef> => ({ id: "agent", runtimeId: "agent" }),
     promptAgent: async (): Promise<void> => {},
     waitAgent: async (): Promise<"running" | "idle" | "exited"> => "idle",

@@ -131,6 +131,29 @@ describe("the pipeline enforces declared scope", () => {
           mkdirSync(worktreePath, { recursive: true });
           return { ...workspace, worktreePath };
         },
+        attestIsolation: async (request: import("../src/protocol.js").IsolationAttestationRequest) => {
+          const worktreePath = request.workspace.worktreePath;
+          return worktreePath === undefined
+            ? {
+                runtime: "scope-runtime",
+                level: "none" as const,
+                workUnitId: request.workUnit.id,
+                workspaceId: request.workspace.id,
+                repositoryRoot: request.repositoryRoot,
+                agentCwd: request.repositoryRoot,
+                observedAt: request.observedAt,
+              }
+            : {
+                runtime: "scope-runtime",
+                level: "git_worktree" as const,
+                workUnitId: request.workUnit.id,
+                workspaceId: request.workspace.id,
+                repositoryRoot: request.repositoryRoot,
+                worktreePath,
+                agentCwd: worktreePath,
+                observedAt: request.observedAt,
+              };
+        },
         startAgent: async () => ({ id: "agent", runtimeId: "agent" }),
         promptAgent: async () => {},
         waitAgent: async () => "idle" as const,

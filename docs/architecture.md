@@ -35,7 +35,7 @@ Work Unit  (declarative; capabilities, not providers)
 Eligibility  (intake boundary — provider policy, explicit allowlist)   ← plans: `factory intake`
                                                                           writes a file, dispatches nothing
         ↓
-Security gate  (risk class → required isolation)                      ← composed, before dispatch
+Security gate  (risk, branch, credentials, dangerous ops — no label)   ← composed, before dispatch
         ↓
 Scheduler  (batches, conflicts, dependencies)                         ← composed
         ↓
@@ -46,6 +46,8 @@ Direct Runtime   Managed Runtime
 OpenCode         Herdr / Hermes
         ↓
 Isolated Git worktree
+        ↓
+Isolation attestation  (runtime-bound evidence, before agent start)    ← composed
         ↓
 Implementation
         ↓
@@ -70,9 +72,11 @@ does, and *plans* means the `factory intake` command calls it to produce a file.
 is the one box outside the pipeline: `factory intake` plans from it, and dispatching that
 plan is the separate `factory work run`. See [cli.md](cli.md).
 
-The security gate runs **before** anything is dispatched — before a workspace, before a worktree,
-before a runtime is invoked — so a refusal has no aftermath to clean up. Each decision is persisted as
-a durable factory event, for admitted work as well as refused work.
+The pre-dispatch security screen runs **before** anything is dispatched — before a workspace, before a
+worktree, before a runtime is invoked — so a policy refusal has no aftermath to clean up. Final
+isolation admission runs **after** the worktree exists and **before** the agent starts, consuming
+runtime-bound attestation rather than a caller-supplied label. Each decision is persisted as a durable
+factory event, for admitted work as well as refused work.
 
 ## The composition layer
 

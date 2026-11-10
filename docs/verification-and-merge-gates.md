@@ -107,6 +107,10 @@ property that was missing, and the reason a containment breach outranks every ot
 the worktree this run verified is not the tree the work landed in, so any verdict beneath it
 describes the wrong tree.
 
+Containment is independent of pre-start isolation attestation. Attestation refuses to start an agent
+without verified, runtime-bound isolation evidence; containment still runs after execution because a
+verified worktree claim is not proof that nothing escaped. Neither is a sandbox.
+
 Like the scope gate, it holds regardless of whether a runtime honours the directory it was handed.
 That is not a hypothetical precaution. Controlled probes showed an agent placing its work correctly
 every time — including in a worktree nested inside the repository, and including one that had to

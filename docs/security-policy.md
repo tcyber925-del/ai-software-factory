@@ -26,16 +26,51 @@ the same class and an assessment can be audited.
 downgrade genuinely untrusted work, and the *refusal* is recorded too — a silently dropped downgrade
 request would leave no trace that weaker isolation was ever asked for.
 
+## Isolation is verified, not asserted
+
+A caller-supplied isolation label is **not** evidence. The factory enforces isolation in two stages:
+
+1. **Pre-dispatch policy screen** (`evaluateSecurityGate`, before any workspace exists). It classifies
+   risk and applies branch-write, credential, and dangerous-operation checks. It refuses work whose
+   minimum isolation is `sandbox` because no approved sandbox runtime is configured. It does **not**
+   admit execution, because there is nothing to attest until a worktree exists.
+2. **Pre-agent isolation admission** (`admitExecution`, inside `executeWorkUnit`, after
+   `createWorktree` and before `startAgent`). The selected runtime returns a typed
+   `IsolationAttestation` bound to that runtime, Work Unit, workspace, repository root, worktree path,
+   and the agent's actual working directory. Admission validates the attestation's shape, identity,
+   freshness, and level.
+
+Missing, malformed, stale, mismatched, or insufficient evidence **blocks** the Work Unit with
+`failure: "isolation_unattested"` before `startAgent` is called. The pipeline short-circuits before
+verification, repair, and integration, so an unattested run is never reported ready.
+
+Passing a literal string such as `"git_worktree"` is refused as malformed evidence.
+
+## Three different controls, not one
+
+| Control | When | What it proves | What it does not prove |
+|---|---|---|---|
+| **Isolation attestation** | Before `startAgent` | The runtime reported verifiable, runtime-bound evidence for this workspace and agent directory | Adversarial containment, host isolation, or that the runtime told the truth |
+| **Post-hoc containment detection** | After the agent stops, and again at the gate | Whether the factory checkout changed during the run | That the agent stayed inside its worktree while running, or anything about privileges |
+| **Real sandbox** | Not shipped | Process/privilege/host isolation by construction | N/A — no adapter offers `sandbox` today |
+
+Attestation does not replace containment detection, and neither is a sandbox. A worktree remains
+developer isolation: it separates files, not privileges, processes, or the host.
+
 ## Higher-risk work cannot silently use an ordinary worktree
 
-`admitExecution` compares the isolation a Work Unit requires against the isolation actually offered.
-When it is insufficient, the Work Unit is **blocked**. Two things it deliberately does not do:
+`assessExecutionRisk` classifies the work and computes the minimum isolation it requires. The
+pre-dispatch screen refuses `untrusted` and `destructive` work before dispatch because they require
+`sandbox` and no sandbox adapter exists.
+
+For work that reaches a workspace, `admitExecution` consumes the runtime's attestation. Two things it
+deliberately does not do:
 
 - it does not downgrade the risk class to fit the isolation available;
 - it does not warn and proceed.
 
-The refusal names the reason: *"`untrusted` work requires `sandbox` but only `git_worktree` is
-available; a git worktree isolates files, not privileges."*
+The refusal names the reason, for example: *"`trusted` work requires `git_worktree`; runtime
+'herdr' attested none ... a git worktree isolates files, not privileges."*
 
 ## Protected branches
 
@@ -64,20 +99,36 @@ substitutes for sandbox isolation of untrusted work. The constant
 ## Adapter boundary for stronger isolation
 
 `IsolationLevel` is a three-value scale — `none` < `git_worktree` < `sandbox` — with an explicit
-ordering function. That is the seam a container or remote-sandbox adapter implements: it reports the
-level it provides, and admission compares levels rather than checking for one specific provider. No
-container platform, remote execution service, or secrets manager is built here; this only defines the
-boundary such an adapter must satisfy.
+ordering function. `WorkerRuntime.attestIsolation(request)` is the seam: an adapter reports typed
+evidence of the isolation it actually provides for that workspace, and admission validates and
+compares levels. No container platform, remote execution service, or secrets manager is built here;
+a sandbox adapter must provide verifiable `sandbox` evidence, not a label.
+
+Honest current state:
+
+- **OpenCode** attests `git_worktree` when the agent subprocess runs in the created worktree. A
+  conformance test proves the process cwd equals the attested path.
+- **Hermes** attests `none` because the agent process runs from the repository root. Hermes may
+  create an internal worktree, but the factory cannot name or observe it, so claiming a worktree would
+  be unverified.
+- **Herdr** attests `none` because it starts the agent in the workspace root pane at the repository
+  root, even though it creates a worktree path.
+
+Hermes and Herdr are therefore refused for work that requires a verified worktree, which keeps the
+interim restriction in force by code. Re-enabling them requires verified worktree execution, not a
+documentation change.
 
 ## Enforced at dispatch
 
-The gate runs in `src/kernel/pipeline.ts` **before** anything is dispatched: before a workspace is
-created, before a worktree is checked out, before a runtime is invoked. A refusal is of the work, not
-of its consequences, so the refusal itself has no evidence to clean up.
+The pre-dispatch screen runs in `src/kernel/pipeline.ts` **before** a workspace is created, a
+worktree is checked out, or a runtime is invoked. The final isolation admission runs in
+`src/kernel/execution.ts` **after** the worktree is created and **before** `startAgent`. A refusal at
+either point means the agent never starts.
 
 Each decision is persisted as a durable `factory` event — `security.allowed` or `security.blocked`
-— for admitted work as well as refused work. An audit that recorded only refusals could not show what
-was allowed and why.
+— for admitted work as well as refused work. Pre-agent decisions include runtime identity, attestation
+outcome, required/provided isolation, workspace/worktree identity, and reason. An audit that recorded
+only refusals could not show what was allowed and why.
 
 ## How risk is declared, and what that means
 
@@ -102,17 +153,14 @@ declares nothing gets `trusted`, which a worktree satisfies. The gate enforces d
 not content analysis, and it cannot become content analysis without either a reliable classifier or
 accepting that the classification is a guess.
 
-## `providedIsolation` is what the dispatch path provides
+## `providedIsolation` is gone
 
-The gate compares the required isolation against the isolation the path actually offers — here
-`git_worktree`, because `executeWorkUnit` creates a worktree before it starts an agent and refuses to
-start one without.
-
-This is the easiest thing to get wrong. `providedIsolation` defaults to `none`, and even `trusted`
-work requires `git_worktree`, so passing the default would refuse **100% of work**, trusted included.
-A gate that refuses everything is not a security control; it is an outage with a reassuring name.
-There is a test asserting ordinary trusted work is admitted, because a suite of "it refuses untrusted
-work" tests would all still pass against that failure.
+Earlier drafts passed `providedIsolation: "git_worktree"` into the gate. That value was removed because
+a caller-supplied level is not evidence. The dispatch path now proves isolation through
+`attestIsolation` and admission, or it refuses to start the agent. Passing a literal label to
+`admitExecution` is refused as malformed evidence, and a suite of "it refuses untrusted work" tests is
+not sufficient — the contract requires tests that show invalid, stale, and mismatched attestations are
+rejected before `startAgent`.
 
 ## Auditability
 

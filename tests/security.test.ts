@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { WorkUnit } from "../src/protocol.js";
+import type { IsolationAttestation, WorkUnit } from "../src/protocol.js";
 import type { RiskClass } from "../src/security/risk.js";
 import {
   DANGEROUS_OPERATION_SCREEN_IS_BEST_EFFORT,
   PROTECTED_BRANCHES,
+  admitExecution,
   assessExecutionRisk,
   detectDangerousOperations,
   evaluateBranchWrite,
@@ -26,6 +27,34 @@ const workUnit: WorkUnit = {
 function clock() {
   let n = 0;
   return { id: () => `e${++n}`, now: () => "2026-01-01T00:00:00.000Z" };
+}
+
+const observedAt = "2026-01-01T00:00:00.000Z";
+const worktreePath = "/repo/.factory/ws-1/worktree";
+
+function attestation(overrides: Partial<IsolationAttestation> = {}): IsolationAttestation {
+  return {
+    runtime: "opencode",
+    level: "git_worktree",
+    workUnitId: workUnit.id,
+    workspaceId: "ws-1",
+    repositoryRoot: "/repo",
+    worktreePath,
+    agentCwd: worktreePath,
+    observedAt,
+    ...overrides,
+  };
+}
+
+function isolationExpected() {
+  return {
+    runtime: "opencode",
+    workUnitId: workUnit.id,
+    workspaceId: "ws-1",
+    worktreePath,
+    repositoryRoot: "/repo",
+    now: observedAt,
+  };
 }
 
 describe("risk classification", () => {
@@ -81,74 +110,132 @@ describe("risk classification", () => {
   });
 });
 
-describe("higher-risk work cannot silently use an ordinary worktree", () => {
-  it("blocks untrusted work in a plain worktree", () => {
+describe("higher-risk work is refused before dispatch", () => {
+  it("blocks untrusted work because no sandbox runtime is configured", () => {
     const gate = evaluateSecurityGate({
       workUnitId: "FCT-014",
       risk: { consumesUntrustedContent: true },
-      providedIsolation: "git_worktree",
       targetBranch: "feature/x",
       writeMode: "pull_request",
     });
     expect(gate.admitted).toBe(false);
     const blocker = gate.blockers.find((entry) => entry.kind === "execution_blocked");
     expect(blocker?.reason).toContain("a git worktree isolates files, not privileges");
+    expect(blocker?.detail).toMatchObject({
+      requiredIsolation: "sandbox",
+      providedIsolation: null,
+      attestation: "not_attempted",
+      stage: "pre_dispatch",
+    });
   });
 
-  it("admits untrusted work only in a sandbox", () => {
+  it("blocks destructive work before dispatch", () => {
     const gate = evaluateSecurityGate({
       workUnitId: "FCT-014",
-      risk: { consumesUntrustedContent: true },
-      providedIsolation: "sandbox",
-      targetBranch: "feature/x",
-      writeMode: "pull_request",
-    });
-    expect(gate.admitted).toBe(true);
-    expect(gate.assessment.risk).toBe("untrusted");
-  });
-
-  it("blocks destructive work even in a worktree, admitting only in a sandbox", () => {
-    const inWorktree = evaluateSecurityGate({
-      workUnitId: "FCT-014",
       risk: { touchesProduction: true },
-      providedIsolation: "git_worktree",
       targetBranch: "feature/x",
       writeMode: "pull_request",
     });
-    expect(inWorktree.admitted).toBe(false);
-
-    const inSandbox = evaluateSecurityGate({
-      workUnitId: "FCT-014",
-      risk: { touchesProduction: true },
-      providedIsolation: "sandbox",
-      targetBranch: "feature/x",
-      writeMode: "pull_request",
-    });
-    expect(inSandbox.admitted).toBe(true);
-  });
-
-  it("admits trusted work in an ordinary worktree", () => {
-    const gate = evaluateSecurityGate({
-      workUnitId: "FCT-014",
-      risk: {},
-      providedIsolation: "git_worktree",
-      targetBranch: "feature/x",
-      writeMode: "pull_request",
-    });
-    expect(gate.admitted).toBe(true);
+    expect(gate.admitted).toBe(false);
+    expect(gate.assessment.risk).toBe("destructive");
   });
 
   it("does not downgrade risk to fit the isolation available", () => {
     const gate = evaluateSecurityGate({
       workUnitId: "FCT-014",
       risk: { touchesProduction: true },
-      providedIsolation: "git_worktree",
       targetBranch: "feature/x",
       writeMode: "pull_request",
     });
     // Still destructive, not quietly downgraded to trusted.
     expect(gate.assessment.risk).toBe("destructive");
     expect(gate.assessment.minimumIsolation).toBe("sandbox");
+  });
+
+  it("screens trusted work but does not admit it before attestation", () => {
+    const gate = evaluateSecurityGate({
+      workUnitId: "FCT-014",
+      risk: {},
+      targetBranch: "feature/x",
+      writeMode: "pull_request",
+    });
+    expect(gate.admitted).toBe(true);
+    const screen = gate.decisions.find((entry) => entry.kind === "dispatch_screened");
+    expect(screen?.detail).toMatchObject({
+      requiredIsolation: "git_worktree",
+      providedIsolation: null,
+      attestation: "pending",
+      stage: "pre_dispatch",
+    });
+  });
+});
+
+describe("admission consumes runtime-bound evidence, not labels", () => {
+  it("refuses the literal git_worktree label", () => {
+    const admission = admitExecution(workUnit, {}, "git_worktree", isolationExpected());
+    expect(admission.admitted).toBe(false);
+    expect(admission.attestation.outcome).toBe("malformed");
+    expect(admission.reason).toMatch(/not evidence|malformed/i);
+  });
+
+  it("admits trusted work with a valid attestation", () => {
+    const admission = admitExecution(workUnit, {}, attestation(), isolationExpected());
+    expect(admission.admitted).toBe(true);
+    expect(admission.attestation.outcome).toBe("verified");
+    expect(admission.reason).toMatch(/git_worktree attested by opencode/);
+  });
+
+  it("refuses an attestation from a different runtime", () => {
+    const admission = admitExecution(
+      workUnit,
+      {},
+      attestation({ runtime: "hermes" }),
+      isolationExpected(),
+    );
+    expect(admission.admitted).toBe(false);
+    expect(admission.attestation.outcome).toBe("mismatched");
+  });
+
+  it("refuses stale evidence", () => {
+    const admission = admitExecution(
+      workUnit,
+      {},
+      attestation({ observedAt: "2025-12-31T00:00:00.000Z" }),
+      isolationExpected(),
+    );
+    expect(admission.admitted).toBe(false);
+    expect(admission.attestation.outcome).toBe("stale");
+  });
+
+  it("refuses an insufficient level for trusted work", () => {
+    const none: IsolationAttestation = {
+      runtime: "opencode",
+      level: "none",
+      workUnitId: workUnit.id,
+      workspaceId: "ws-1",
+      repositoryRoot: "/repo",
+      agentCwd: "/repo",
+      observedAt,
+    };
+    const admission = admitExecution(workUnit, {}, none, isolationExpected());
+    expect(admission.admitted).toBe(false);
+    expect(admission.attestation.outcome).toBe("insufficient");
+    expect(admission.reason).toMatch(/isolates files, not privileges/i);
+  });
+
+  it("would admit a sandbox attestation for untrusted work, but no adapter offers one", () => {
+    // This proves the contract compares levels rather than hard-coding a
+    // provider. It does not claim a sandbox adapter exists; the pre-dispatch
+    // screen refuses untrusted work today because none does.
+    const sandbox = attestation({ level: "sandbox" });
+    const admission = admitExecution(
+      workUnit,
+      { consumesUntrustedContent: true },
+      sandbox,
+      isolationExpected(),
+    );
+    expect(admission.admitted).toBe(true);
+    expect(admission.assessment.minimumIsolation).toBe("sandbox");
   });
 });
 
@@ -179,7 +266,6 @@ describe("protected branches cannot be modified directly", () => {
     const gate = evaluateSecurityGate({
       workUnitId: "FCT-014",
       risk: {},
-      providedIsolation: "git_worktree",
       targetBranch: "main",
       writeMode: "direct_push",
     });
@@ -208,7 +294,6 @@ describe("no production credentials by default", () => {
     const gate = evaluateSecurityGate({
       workUnitId: "FCT-014",
       risk: {},
-      providedIsolation: "git_worktree",
       targetBranch: "feature/x",
       writeMode: "pull_request",
       credentials: { scope: "production", explicitlyRequired: true },
@@ -238,7 +323,6 @@ describe("dangerous operation detection", () => {
     const gate = evaluateSecurityGate({
       workUnitId: "FCT-014",
       risk: {},
-      providedIsolation: "git_worktree",
       targetBranch: "feature/x",
       writeMode: "pull_request",
       commands: ["rm -rf build"],
@@ -290,7 +374,6 @@ describe("security decisions are explicit and auditable", () => {
     const gate = evaluateSecurityGate({
       workUnitId: "FCT-014",
       risk: {},
-      providedIsolation: "git_worktree",
       targetBranch: "feature/x",
       writeMode: "pull_request",
       credentials: { scope: "development", explicitlyRequired: true },
@@ -307,7 +390,6 @@ describe("the factory does not claim a worktree is a sandbox", () => {
     const gate = evaluateSecurityGate({
       workUnitId: "FCT-014",
       risk: { consumesUntrustedContent: true },
-      providedIsolation: "git_worktree",
       targetBranch: "feature/x",
       writeMode: "pull_request",
     });
