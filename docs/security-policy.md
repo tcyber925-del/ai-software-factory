@@ -31,14 +31,24 @@ request would leave no trace that weaker isolation was ever asked for.
 A caller-supplied isolation label is **not** evidence. The factory enforces isolation in two stages:
 
 1. **Pre-dispatch policy screen** (`evaluateSecurityGate`, before any workspace exists). It classifies
-   risk and applies branch-write, credential, and dangerous-operation checks. It refuses work whose
-   minimum isolation is `sandbox` because no approved sandbox runtime is configured. It does **not**
-   admit execution, because there is nothing to attest until a worktree exists.
+   risk and evaluates branch-write policy from the inputs it receives. `evaluateSecurityGate` also
+   supports credential and dangerous-operation checks when callers supply `credentials` and `commands`.
+   It refuses work whose minimum isolation is `sandbox` because no approved sandbox runtime is
+   configured. It does **not** admit execution, because there is nothing to attest until a worktree
+   exists.
 2. **Pre-agent isolation admission** (`admitExecution`, inside `executeWorkUnit`, after
    `createWorktree` and before `startAgent`). The selected runtime returns a typed
    `IsolationAttestation` bound to that runtime, Work Unit, workspace, repository root, worktree path,
    and the agent's actual working directory. Admission validates the attestation's shape, identity,
    freshness, and level.
+
+**Current dispatch wiring (`src/kernel/pipeline.ts`):** the pipeline calls the pre-dispatch screen with
+`risk`, `targetBranch: workUnit.baseRevision ?? "HEAD"`, and `writeMode: "pull_request"`. It does **not**
+currently supply `credentials` or `commands`. As a result, credential and dangerous-operation decisions
+are not populated/enforced by this dispatch path today, and the branch check screens pull-request mode
+against the derived base branch rather than validating an actual direct-push target. Connecting
+credential requests, subprocess environment boundaries, and command/network enforcement is tracked
+separately (see #89/#92) and is out of scope for this change.
 
 Missing, malformed, stale, mismatched, or insufficient evidence **blocks** the Work Unit with
 `failure: "isolation_unattested"` before `startAgent` is called. The pipeline short-circuits before
@@ -79,22 +89,40 @@ including the factory and its owner. Those branches are reachable only through a
 merge gate. This is data, so it can be recorded as evidence rather than trusted to a code path someone
 might bypass.
 
+**Dispatch note:** the pipeline currently invokes the screen in pull-request mode with
+`targetBranch: workUnit.baseRevision ?? "HEAD"` (`src/kernel/pipeline.ts:431-446`). This records that
+screening context; it does **not** by itself validate or authorize an actual direct push to a protected
+branch target. Protected-branch enforcement for real writes remains a property of the write/merge path
+and human-gated integration policy, not of this pre-dispatch call alone.
+
 ## Credentials
 
-Production credentials are **never granted by the factory** — not on request, not with approval, not
-ever. Lower scopes (`development`, `staging`) are granted only when the Work Unit explicitly requires
-them. Anything production must be supplied out of band by a human, which keeps the decision outside
-the factory's authority.
+`evaluateSecurityGate`/`evaluateCredentialAccess` encode the factory policy: production credentials are
+**never granted by the factory** — not on request, not with approval, not ever. Lower scopes
+(`development`, `staging`) are granted only when explicitly required. Anything production must be
+supplied out of band by a human, which keeps the decision outside the factory's authority.
+
+**Dispatch note:** the current pipeline pre-dispatch screen does not supply a `credentials` input, so it
+does not emit or enforce a `credential_access` decision for dispatch requests. This does **not** grant
+credentials, wire secrets into subprocess environments, or implement environment/network boundaries;
+that work is tracked separately (#89/#92). Until such boundaries are implemented and evidenced, treat
+credential handling as outside this dispatch screen's enforced inputs and preserve interim restrictions
+(#90).
 
 ## Dangerous-operation screen
 
-Detects recursive force deletes, force pushes, hard resets, history rewrites, privileged containers,
-`chmod 777`, and credential reads.
+`detectDangerousOperations` detects recursive force deletes, force pushes, hard resets, history rewrites,
+privileged containers, `chmod 777`, and credential reads.
 
 **This is explicitly best-effort and is not a security boundary.** A determined command can evade a
 regex. It exists to surface a finding and record it, not to contain an adversary, and it never
 substitutes for sandbox isolation of untrusted work. The constant
 `DANGEROUS_OPERATION_SCREEN_IS_BEST_EFFORT` states this in code so it cannot be quietly forgotten.
+
+**Dispatch note:** the current pipeline pre-dispatch screen does not supply `commands`, so this screen is
+not applied to dispatched runtime/agent commands in that path today. No command, environment, or network
+isolation behavior is changed by documenting this. Expanding command/environment enforcement is out of
+scope here (#89/#92).
 
 ## Adapter boundary for stronger isolation
 
@@ -166,9 +194,12 @@ rejected before `startAgent`.
 
 Every decision is a value, and every applied control produces a `SecurityDecisionRecord` recorded as a
 durable factory event (`security.allowed` / `security.blocked`). A decision that exists only in a
-terminal is not auditable. `evaluateSecurityGate` applies admission, branch-write, credential and
-dangerous-operation checks together, so a caller cannot accidentally apply only some of them — it
-returns one decision per control, including when everything passed.
+terminal is not auditable. `evaluateSecurityGate` can apply risk/isolation screening, branch-write,
+credential, and dangerous-operation checks together when inputs are provided, returning one decision per
+control it evaluates (including when everything passed). In the current dispatch path, the pre-dispatch
+screen evaluates the risk/isolation and branch-write inputs described above but does not receive
+`credentials` or `commands`; pre-agent isolation admission separately records runtime-bound attestation
+decisions. Audit records should be read together with the enforced inputs for that path.
 
 ## Least privilege
 
