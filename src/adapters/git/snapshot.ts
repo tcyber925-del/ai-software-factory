@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parsePorcelain } from "./changes.js";
 import type { RepoSnapshot, RepoSnapshotProvider } from "../../kernel/containment.js";
+import { evaluateProcessPolicy } from "../../security/process-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,11 +23,17 @@ const MAX_BYTES = 8 * 1024 * 1024;
  * to certify it.
  */
 export const gitRepoSnapshot: RepoSnapshotProvider = async (root) => {
+  const policy = evaluateProcessPolicy({ role: "git.read_snapshot", hostEnv: process.env as Record<string, string | undefined> });
+  if (policy.decision !== "allow" || !policy.effectiveEnv) {
+    throw new Error(`git snapshot refused by process policy: ${policy.reasonCode}`);
+  }
+  const env = policy.effectiveEnv;
   const [head, status] = await Promise.all([
-    execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root, maxBuffer: MAX_BYTES }),
+    execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root, maxBuffer: MAX_BYTES, env }),
     execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], {
       cwd: root,
       maxBuffer: MAX_BYTES,
+      env,
     }),
   ]);
   return { head: head.stdout.trim(), dirty: parsePorcelain(status.stdout) };

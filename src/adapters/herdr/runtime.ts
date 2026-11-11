@@ -13,6 +13,7 @@ import type {
 } from "../../protocol.js";
 import type { HerdrCommandRunner } from "./process.js";
 import { defaultHerdrCommandRunner } from "./process.js";
+import { sanitizeEvidence } from "../../security/redaction.js";
 
 interface HerdrWorkspaceResponse {
   result?: {
@@ -193,7 +194,7 @@ export class HerdrRuntime implements WorkerRuntime {
     if (!prompt.trim()) throw new Error("prompt must not be empty");
     const state = this.#getAgent(agent);
     state.status = "running";
-    state.events.push(this.#event(agent.id, "prompt.started", { prompt }));
+    state.events.push(this.#event(agent.id, "prompt.started", { prompt: sanitizeEvidence(prompt, 2048) }));
 
     try {
       await this.#runJson<HerdrAgentResponse>([

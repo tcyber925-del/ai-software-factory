@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { evaluateProcessPolicy } from "../../security/process-policy.js";
 
 /**
  * Command boundary for the Hermes adapter.
@@ -22,18 +23,29 @@ export interface HermesCommandResult {
 }
 
 export interface HermesCommandRunner {
-  run(args: string[], cwd: string, timeoutMs: number): Promise<HermesCommandResult>;
+  run(args: string[], cwd: string, timeoutMs: number, env?: Record<string, string>): Promise<HermesCommandResult>;
 }
 
 export const HERMES_BIN = "hermes";
 
 export const defaultHermesCommandRunner: HermesCommandRunner = {
-  async run(args, cwd, timeoutMs) {
+  async run(args, cwd, timeoutMs, env) {
+    const policy =
+      env === undefined
+        ? evaluateProcessPolicy({ role: "runtime.hermes.command", hostEnv: process.env as Record<string, string | undefined> })
+        : undefined;
+    const effectiveEnv = env ?? policy?.effectiveEnv;
+    if (env === undefined) {
+      if (!policy || policy.decision !== "allow" || !effectiveEnv) {
+        throw new Error(`hermes command refused by process policy: ${policy?.reasonCode ?? "policy_unavailable"}`);
+      }
+    }
     try {
       const { stdout, stderr } = await execFileAsync(HERMES_BIN, args, {
         cwd,
         timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024,
+        env: effectiveEnv,
       });
       return { stdout, stderr, exitCode: 0 };
     } catch (error) {

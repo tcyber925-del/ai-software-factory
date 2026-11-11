@@ -3,6 +3,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExecutionEvent, VerificationCheck, VerificationResult } from "../../protocol.js";
 import type { EventLog } from "../../state/event-log.js";
+import { evaluateProcessPolicy } from "../../security/process-policy.js";
+import { redactSecrets, safeCommandInvocation, sanitizeEvidence } from "../../security/redaction.js";
 
 /**
  * Deterministic shell verification.
@@ -23,13 +25,23 @@ export interface ShellCommandResult {
 }
 
 export interface ShellRunner {
-  run(command: string, args: string[], cwd: string): Promise<ShellCommandResult>;
+  run(command: string, args: string[], cwd: string, env?: Record<string, string>): Promise<ShellCommandResult>;
 }
 
 export const defaultShellRunner: ShellRunner = {
-  async run(command, args, cwd) {
+  async run(command, args, cwd, env) {
+    const policy =
+      env === undefined
+        ? evaluateProcessPolicy({ role: "verification.shell", hostEnv: process.env as Record<string, string | undefined> })
+        : undefined;
+    const effectiveEnv = env ?? policy?.effectiveEnv;
+    if (env === undefined) {
+      if (!policy || policy.decision !== "allow" || !effectiveEnv) {
+        throw new Error(`verification command refused by process policy: ${policy?.reasonCode ?? "policy_unavailable"}`);
+      }
+    }
     try {
-      const { stdout, stderr } = await execFileAsync(command, args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+      const { stdout, stderr } = await execFileAsync(command, args, { cwd, maxBuffer: 10 * 1024 * 1024, env: effectiveEnv });
       return { stdout, stderr, exitCode: 0 };
     } catch (error) {
       const failure = error as { stdout?: string; stderr?: string; code?: unknown };
@@ -119,9 +131,10 @@ export async function runShellVerification(options: ShellVerificationOptions): P
 }
 
 function evidenceFor(check: ShellCheckSpec, result: ShellCommandResult, tailBytes: number): string {
-  const invocation = [check.command, ...(check.args ?? [])].join(" ");
-  const output = `${result.stdout}${result.stderr}`.trimEnd();
+  const invocation = safeCommandInvocation(check.command, check.args ?? []);
+  const output = redactSecrets(`${result.stdout}${result.stderr}`.trimEnd());
   const tail = output.length > tailBytes ? output.slice(-tailBytes) : output;
+  const boundedTail = tail.length > 0 ? sanitizeEvidence(tail, Math.max(512, tailBytes)) : "";
   const summary = `$ ${invocation}\nexit=${result.exitCode}`;
-  return tail.length > 0 ? `${summary}\n${tail}` : summary;
+  return boundedTail.length > 0 ? `${summary}\n${boundedTail}` : summary;
 }

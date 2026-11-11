@@ -164,7 +164,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<Pipeline
         slice.map(async (workUnitId) => {
           const scheduled = options.workUnits.find((candidate) => candidate.workUnit.id === workUnitId);
           if (scheduled === undefined) throw new Error(`scheduler produced an unknown work unit: ${workUnitId}`);
-          return runOne(scheduled.workUnit, scheduled.risk, scheduled.paths, options, eventLog, id, now);
+          return runOne(scheduled.workUnit, scheduled.risk, scheduled.credentials, scheduled.paths, options, eventLog, id, now);
         }),
       );
       results.push(...settled);
@@ -394,6 +394,7 @@ async function evaluateScope(
 async function runOne(
   workUnit: WorkUnit,
   risk: ExecutionRiskInput | undefined,
+  credentials: { scope: "none" | "development" | "staging" | "production"; explicitlyRequired: boolean } | undefined,
   declaredPaths: string[] | undefined,
   options: RunPipelineOptions,
   eventLog: EventLog | undefined,
@@ -433,6 +434,7 @@ async function runOne(
     risk: risk ?? {},
     targetBranch: workUnit.baseRevision ?? "HEAD",
     writeMode: "pull_request",
+    ...(credentials === undefined ? {} : { credentials }),
   });
   if (eventLog !== undefined) {
     // Each decision is persisted individually, because a gate returns several and
