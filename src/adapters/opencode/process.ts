@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { evaluateProcessPolicy } from "../../security/process-policy.js";
+import type { ProcessRole } from "../../security/process-policy.js";
 
 /**
  * Default ceiling for a runtime subprocess.
@@ -19,6 +21,10 @@ export const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 export interface CommandOptions {
   /** Overrides `DEFAULT_COMMAND_TIMEOUT_MS` for a call known to be long-running. */
   timeoutMs?: number;
+  /** Explicit environment (allowlisted). When omitted, derived from `role` policy; no full inheritance. */
+  env?: Record<string, string>;
+  /** Process role used to derive policy when `env` is omitted. Defaults to runtime.opencode.command. */
+  role?: ProcessRole;
 }
 
 export interface CommandResult { stdout: string; stderr: string; }
@@ -39,6 +45,19 @@ export interface CommandRunner { run(command: string, args: string[], cwd: strin
 export const defaultCommandRunner: CommandRunner = {
   async run(command, args, cwd, options) {
     const timeoutMs = options?.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    const policy =
+      options?.env === undefined
+        ? evaluateProcessPolicy({
+            role: options?.role ?? "runtime.opencode.command",
+            hostEnv: process.env as Record<string, string | undefined>,
+          })
+        : undefined;
+    const env = options?.env ?? policy?.effectiveEnv;
+    if (options?.env === undefined) {
+      if (!policy || policy.decision !== "allow" || !env) {
+        throw new Error(`command refused by process policy: ${policy?.reasonCode ?? "policy_unavailable"} (${policy?.reason ?? "no policy"})`);
+      }
+    }
     const dir = mkdtempSync(join(tmpdir(), "factory-cmd-"));
     const stdoutPath = join(dir, "stdout");
     const stderrPath = join(dir, "stderr");
@@ -47,7 +66,7 @@ export const defaultCommandRunner: CommandRunner = {
 
     try {
       return await new Promise<CommandResult>((resolve, reject) => {
-        const child = spawn(command, args, { cwd, stdio: ["ignore", stdoutFd, stderrFd] });
+        const child = spawn(command, args, { cwd, stdio: ["ignore", stdoutFd, stderrFd], env });
         let timedOut = false;
         let settled = false;
 

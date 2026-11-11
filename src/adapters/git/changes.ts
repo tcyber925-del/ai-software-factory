@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { evaluateProcessPolicy } from "../../security/process-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,9 +28,14 @@ export type ChangedFiles = (worktreePath: string) => Promise<string[]>;
 const MAX_STATUS_BYTES = 8 * 1024 * 1024;
 
 export const gitChangedFiles: ChangedFiles = async (worktreePath) => {
+  const policy = evaluateProcessPolicy({ role: "git.read_status", hostEnv: process.env as Record<string, string | undefined> });
+  if (policy.decision !== "allow" || !policy.effectiveEnv) {
+    throw new Error(`git status refused by process policy: ${policy.reasonCode}`);
+  }
   const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], {
     cwd: worktreePath,
     maxBuffer: MAX_STATUS_BYTES,
+    env: policy.effectiveEnv,
   });
   return parsePorcelain(stdout);
 };

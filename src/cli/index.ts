@@ -3,6 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { evaluateProcessPolicy } from "../security/process-policy.js";
 import type { JsonSchema } from "../kernel/json-schema.js";
 import { runPipeline } from "../kernel/pipeline.js";
 import type { PipelineResult } from "../kernel/pipeline.js";
@@ -273,6 +274,13 @@ const VERIFY_STEPS = ["format:check", "lint", "typecheck", "test", "build", "ver
 async function factoryVerify(context: RunContext): Promise<CommandOutput> {
   const run = promisify(execFile);
   const lines: string[] = [];
+  const policy = evaluateProcessPolicy({ role: "cli.project_verify_script", hostEnv: process.env as Record<string, string | undefined> });
+  if (policy.decision !== "allow" || !policy.effectiveEnv) {
+    lines.push(`fail  ${policy.reason}`);
+    lines.push("      project-defined verify scripts require an approved process policy/exception (SP-11)");
+    return { exitCode: 1, lines };
+  }
+  const env = { ...policy.effectiveEnv };
 
   let scripts: Record<string, unknown> = {};
   try {
@@ -294,7 +302,7 @@ async function factoryVerify(context: RunContext): Promise<CommandOutput> {
   // verification failure.
   if (typeof scripts["verify"] === "string") {
     try {
-      await run("npm", ["run", "verify"], { cwd: context.cwd, maxBuffer: 32 * 1024 * 1024 });
+      await run("npm", ["run", "verify"], { cwd: context.cwd, maxBuffer: 32 * 1024 * 1024, env });
       lines.push("ok    npm run verify");
       lines.push("verification passed (1 step).");
       return { exitCode: 0, lines };
@@ -315,7 +323,7 @@ async function factoryVerify(context: RunContext): Promise<CommandOutput> {
 
   for (const step of present) {
     try {
-      await run("npm", ["run", step], { cwd: context.cwd, maxBuffer: 32 * 1024 * 1024 });
+      await run("npm", ["run", step], { cwd: context.cwd, maxBuffer: 32 * 1024 * 1024, env });
       lines.push(`ok    npm run ${step}`);
     } catch {
       lines.push(`fail  npm run ${step}`);

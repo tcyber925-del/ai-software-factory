@@ -416,13 +416,12 @@ describe("checks reach the verification stage", () => {
   });
 });
 
-describe("factory verify reads the project's own checks", () => {
+describe("factory verify is fail-closed by process policy (SP-11, WU-92-05)", () => {
   /**
-   * The previous implementation invoked a fixed list including `format:check`,
-   * `lint`, and `typecheck` — none of which this repository defines — so
-   * `factory verify` failed on a factory that is itself green. A verification
-   * command a project does not recognise can only fail, and a command that cannot
-   * pass is indistinguishable from one that found a problem.
+   * Project-defined npm scripts execute arbitrary code with inherited privileges if
+   * not constrained. Per approved #92 design, cli.project_verify_script is blocked
+   * by default (no approved exception/path implemented), so `factory verify` must
+   * refuse before executing scripts, regardless of project contents.
    */
 
   function project(scripts: Record<string, string> | null, name: string): string {
@@ -437,46 +436,33 @@ describe("factory verify reads the project's own checks", () => {
 
   const runVerify = async (cwd: string) => dispatch(["verify"], { cwd });
 
-  it("runs the project's own verify script alone", async () => {
-    // A `verify` script that already chains `test` must not also run `test`
-    // separately, or the suite runs twice and a slow check reads as a failure.
+  it("refuses to run project scripts when no approved policy/exception exists", async () => {
     const dir = project({ verify: "true", test: "true", build: "true" }, "has-verify");
     const result = await runVerify(dir);
-    expect(result.exitCode).toBe(0);
-    expect(result.lines.join("\n")).toMatch(/ok\s+npm run verify/);
-    expect(result.lines.join("\n")).not.toMatch(/npm run test/);
-  });
-
-  it("runs only the steps the project declares, and names the rest", async () => {
-    const dir = project({ test: "true" }, "partial");
-    const result = await runVerify(dir);
-    expect(result.exitCode).toBe(0);
-    expect(result.lines.join("\n")).toMatch(/ok\s+npm run test/);
-    expect(result.lines.join("\n")).toMatch(/skip\s+not declared by this project: .*lint/);
-  });
-
-  it("fails when the project declares no checks at all", async () => {
-    // "Nothing was verified" must never be reported as "verification passed".
-    const dir = project({ start: "true" }, "none");
-    const result = await runVerify(dir);
     expect(result.exitCode).toBe(1);
-    expect(result.lines.join("\n")).toMatch(/declares none of/);
+    expect(result.lines.join("\n")).toMatch(/process policy|no approved process policy|SP-11/i);
+    expect(result.lines.join("\n")).not.toMatch(/ok\s+npm run/);
     expect(result.lines.join("\n")).not.toMatch(/verification passed/);
   });
 
-  it("fails when there is no readable package.json", async () => {
-    const result = await runVerify(project(null, "nopkg"));
-    expect(result.exitCode).toBe(1);
-    expect(result.lines.join("\n")).toMatch(/no readable package\.json/);
+  it("refuses even when project declares partial or no checks", async () => {
+    for (const scripts of [{ test: "true" }, { start: "true" }, null] as const) {
+      const dir = project(scripts, scripts === null ? "nopkg" : "partial");
+      const result = await runVerify(dir);
+      expect(result.exitCode).toBe(1);
+      expect(result.lines.join("\n")).toMatch(/process policy|no approved process policy|SP-11/i);
+      expect(result.lines.join("\n")).not.toMatch(/verification passed/);
+    }
   });
 
-  it("fails when a declared check fails", async () => {
+  it("does not execute failing scripts when refused by policy", async () => {
     const result = await runVerify(project({ test: "exit 1" }, "failing"));
     expect(result.exitCode).toBe(1);
-    expect(result.lines.join("\n")).toMatch(/fail\s+npm run test/);
-    expect(result.lines.join("\n")).not.toMatch(/verification passed/);
+    expect(result.lines.join("\n")).toMatch(/process policy|no approved process policy|SP-11/i);
+    expect(result.lines.join("\n")).not.toMatch(/fail\s+npm run test/);
   });
 });
+
 
 describe("the prompt timeout is an operator recourse", () => {
   it("refuses a non-positive or non-numeric value rather than silently defaulting", async () => {

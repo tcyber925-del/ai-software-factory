@@ -593,6 +593,64 @@ describe("the security gate is applied before dispatch", () => {
   });
 });
 
+describe("credential admission is enforced before dispatch (WU-92-04)", () => {
+  const signals = (extra: Partial<ScheduledWorkUnit> = {}): ScheduledWorkUnit[] => [
+    { workUnit: { ...unit("CRED-1").workUnit, capabilities: ["testing"] }, paths: ["src/cred"], ...extra },
+  ];
+
+  const run = async (workUnits: ScheduledWorkUnit[]) => {
+    const log = new InMemoryEventLog();
+    const result = await runPipeline({
+      workUnits,
+      schema,
+      runtimes: [runtime()],
+      checks,
+      cwd: ".",
+      eventLog: log,
+      runner: passing,
+      ...clock(),
+    });
+    return { result, log };
+  };
+
+  it("refuses production credentials before any agent starts, even when explicitly required", async () => {
+    const { result, log } = await run(signals({ credentials: { scope: "production", explicitlyRequired: true } }));
+    expect(result.status).toBe("blocked");
+    expect(result.runs[0]?.outcome).toBe("blocked");
+    expect(result.runs[0]?.integration.reason).toMatch(/security gate refused/);
+    expect(result.runs[0]?.integration.reason).toMatch(/never granted|production/i);
+
+    const types = log.stored().map((event) => event.type);
+    expect(types).not.toContain("worker.started");
+    expect(types).not.toContain("workspace.created");
+    expect(types).not.toContain("worktree.created");
+  });
+
+  it("records credential refusal durably with scope/reason and no secret values", async () => {
+    const { log } = await run(signals({ credentials: { scope: "production", explicitlyRequired: true } }));
+    const cred = log.stored().find((event) => event.type === "security.blocked" && event.payload["kind"] === "credential_access");
+    expect(cred).toBeDefined();
+    expect(cred?.source).toBe("factory");
+    expect(cred?.payload).toMatchObject({ allowed: false, kind: "credential_access", scope: "production" });
+    expect(String(cred?.payload["reason"] ?? "")).toMatch(/never granted/);
+    expect(JSON.stringify(cred?.payload)).not.toMatch(/secret|token|password|api_key|credential_value/i);
+  });
+
+  it("refuses non-production credentials when not explicitly required", async () => {
+    const { result, log } = await run(signals({ credentials: { scope: "staging", explicitlyRequired: false } }));
+    expect(result.status).toBe("blocked");
+    const types = log.stored().map((event) => event.type);
+    expect(types).not.toContain("worker.started");
+    expect(types).toContain("security.blocked");
+  });
+
+  it("absent credential request does not emit a permissive credential grant", async () => {
+    const { log } = await run(signals());
+    const credEvents = log.stored().filter((event) => event.payload["kind"] === "credential_access");
+    expect(credEvents).toHaveLength(0);
+  });
+});
+
 /**
  * A runtime that failed to run is not re-dispatched by the repair loop.
  *

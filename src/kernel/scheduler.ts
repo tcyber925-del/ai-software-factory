@@ -48,6 +48,13 @@ export interface ScheduledWorkUnit {
    * it is not content analysis. See `docs/security-policy.md`.
    */
   risk?: ExecutionRiskInput;
+  /**
+   * Declared credential request for this dispatch, consumed by the security gate.
+   *
+   * Admission/authorization only: a granted decision does not imply credential
+   * material is delivered to subprocesses. Production scope is never granted.
+   */
+  credentials?: { scope: "none" | "development" | "staging" | "production"; explicitlyRequired: boolean };
 }
 
 export type DecisionOutcome = "scheduled" | "blocked";

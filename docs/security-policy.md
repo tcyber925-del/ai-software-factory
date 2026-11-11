@@ -43,12 +43,14 @@ A caller-supplied isolation label is **not** evidence. The factory enforces isol
    freshness, and level.
 
 **Current dispatch wiring (`src/kernel/pipeline.ts`):** the pipeline calls the pre-dispatch screen with
-`risk`, `targetBranch: workUnit.baseRevision ?? "HEAD"`, and `writeMode: "pull_request"`. It does **not**
-currently supply `credentials` or `commands`. As a result, credential and dangerous-operation decisions
-are not populated/enforced by this dispatch path today, and the branch check screens pull-request mode
-against the derived base branch rather than validating an actual direct-push target. Connecting
-credential requests, subprocess environment boundaries, and command/network enforcement is tracked
-separately (see #89/#92) and is out of scope for this change.
+`risk`, `targetBranch: workUnit.baseRevision ?? "HEAD"`, and `writeMode: "pull_request"`. Declared
+dispatch credentials (`ScheduledWorkUnit.credentials`) are supplied when present, so credential-scope
+admission decisions are enforced for declared requests (production never granted; non-production requires
+explicit requirement per gate policy). The screen still does **not** receive `commands`, so the
+dangerous-operation screen is not applied to dispatched runtime/agent commands in that path today. The
+branch check screens pull-request mode against the derived base branch rather than validating an actual
+direct-push target. Credential **material** delivery, command/environment boundary enforcement beyond
+implemented subprocess policy controls, and network enforcement remain separate/out of scope (see #89/#92).
 
 Missing, malformed, stale, mismatched, or insufficient evidence **blocks** the Work Unit with
 `failure: "isolation_unattested"` before `startAgent` is called. The pipeline short-circuits before
@@ -102,12 +104,13 @@ and human-gated integration policy, not of this pre-dispatch call alone.
 (`development`, `staging`) are granted only when explicitly required. Anything production must be
 supplied out of band by a human, which keeps the decision outside the factory's authority.
 
-**Dispatch note:** the current pipeline pre-dispatch screen does not supply a `credentials` input, so it
-does not emit or enforce a `credential_access` decision for dispatch requests. This does **not** grant
-credentials, wire secrets into subprocess environments, or implement environment/network boundaries;
-that work is tracked separately (#89/#92). Until such boundaries are implemented and evidenced, treat
-credential handling as outside this dispatch screen's enforced inputs and preserve interim restrictions
-(#90).
+**Dispatch note:** when a dispatch declares `credentials`, the pipeline supplies them to the pre-dispatch
+screen and persists the resulting `credential_access` decision (refusals block dispatch before agent
+start). Absence of a declaration does not grant credentials. This enforces admission/authorization
+decisions only: it does **not** deliver credential material into subprocess environments, and no
+subprocess policy path forwards dev/staging credential material by default in the implemented #92 work.
+Environment/network boundaries and any separately reviewed delivery mechanism remain tracked separately
+(#89/#92). Preserve interim restrictions (#90).
 
 ## Dangerous-operation screen
 
@@ -120,9 +123,8 @@ substitutes for sandbox isolation of untrusted work. The constant
 `DANGEROUS_OPERATION_SCREEN_IS_BEST_EFFORT` states this in code so it cannot be quietly forgotten.
 
 **Dispatch note:** the current pipeline pre-dispatch screen does not supply `commands`, so this screen is
-not applied to dispatched runtime/agent commands in that path today. No command, environment, or network
-isolation behavior is changed by documenting this. Expanding command/environment enforcement is out of
-scope here (#89/#92).
+not applied to dispatched runtime/agent commands in that path today. Expanding command screening and
+environment/network enforcement is out of scope here (#89/#92).
 
 ## Adapter boundary for stronger isolation
 
@@ -201,11 +203,26 @@ screen evaluates the risk/isolation and branch-write inputs described above but 
 `credentials` or `commands`; pre-agent isolation admission separately records runtime-bound attestation
 decisions. Audit records should be read together with the enforced inputs for that path.
 
+## Subprocess environment policy (WU-92-03+ implementation, partial)
+
+A shared fail-closed process policy (`src/security/process-policy.ts`) evaluates known subprocess roles
+and constructs explicit allowlisted environments (no full host `process.env` inheritance) for covered
+paths, or refuses/marks unsupported roles. Implemented/default-enforced coverage includes key git,
+verification, and runtime runner paths (SP-01–SP-06 direction) with best-effort evidence redaction/bounding
+for updated verification/runtime evidence paths. Some paths are intentionally blocked by default pending
+approved exceptions (e.g. SP-11 CLI project-verify scripts, SP-09/SP-10 doctor version/dispatch probes);
+SP-12/SP-13 remain dev-only/excluded from production dispatch policy. This reduces accidental exposure; it
+is **not** a sandbox, not network/egress enforcement, and not proof of containment. See
+`docs/security/wu-92-02-process-policy-design.md` and `docs/security/subprocess-inventory.md` for
+dispositions, limits, and implementation status.
+
 ## Least privilege
 
 The factory requests nothing by default. No credential scope is granted unless asked for, no
 production access exists, and higher-risk work is refused rather than downgraded. Admitting less is
-the default; widening requires an explicit, recorded decision.
+the default; widening requires an explicit, recorded decision. Credential admission is authorization-only
+unless/until a separately reviewed, tested delivery mechanism is approved; production credentials are
+never granted.
 
 ## Boundary
 

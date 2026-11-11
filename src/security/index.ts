@@ -235,3 +235,16 @@ export function isolationSecurityDecision(
     },
   };
 }
+
+export {
+  evaluateProcessPolicy,
+  type CredentialScope,
+  type ProcessPolicyConstraints,
+  type ProcessPolicyDecision,
+  type ProcessPolicyEvidence,
+  type ProcessPolicyInput,
+  type ProcessPolicyResult,
+  type ProcessRole,
+} from "./process-policy.js";
+
+export { boundText, redactSecrets, safeCommandInvocation, sanitizeEvidence } from "./redaction.js";

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { defaultCommandRunner } from "../adapters/opencode/process.js";
+import { evaluateProcessPolicy } from "../security/process-policy.js";
 
 /**
  * Environment probes for `factory doctor`.
@@ -17,6 +18,20 @@ import { defaultCommandRunner } from "../adapters/opencode/process.js";
  */
 
 const execFileAsync = promisify(execFile);
+
+async function execGitProbe(root: string, args: string[]): Promise<{ stdout: string; code: number }> {
+  const policy = evaluateProcessPolicy({ role: "git.read_snapshot", hostEnv: process.env as Record<string, string | undefined> });
+  if (policy.decision !== "allow" || !policy.effectiveEnv) {
+    return { stdout: "", code: 1 };
+  }
+  try {
+    const { stdout } = await execFileAsync("git", args, { cwd: root, maxBuffer: 10 * 1024 * 1024, env: policy.effectiveEnv });
+    return { stdout, code: 0 };
+  } catch (error) {
+    const failure = error as { stdout?: string; code?: unknown };
+    return { stdout: failure.stdout ?? "", code: typeof failure.code === "number" ? failure.code : 1 };
+  }
+}
 
 export interface WorktreeSupport {
   supported: boolean;
@@ -110,15 +125,7 @@ export interface SystemProbeOptions {
 export function createSystemProbe(repositoryRoot?: string, options: SystemProbeOptions = {}): DoctorProbe {
   const root = resolve(repositoryRoot ?? process.cwd());
 
-  const git = async (args: string[]): Promise<{ stdout: string; code: number }> => {
-    try {
-      const { stdout } = await execFileAsync("git", args, { cwd: root, maxBuffer: 10 * 1024 * 1024 });
-      return { stdout, code: 0 };
-    } catch (error) {
-      const failure = error as { stdout?: string; code?: unknown };
-      return { stdout: failure.stdout ?? "", code: typeof failure.code === "number" ? failure.code : 1 };
-    }
-  };
+  const git = (args: string[]) => execGitProbe(root, args);
 
   return {
     cwd: () => root,
@@ -126,7 +133,7 @@ export function createSystemProbe(repositoryRoot?: string, options: SystemProbeO
 
     async worktreeSupport() {
       if ((await git(["--version"])).code !== 0) {
-        return { supported: false, reasons: ["git is not available on PATH"] };
+        return { supported: false, reasons: ["git is not available or refused by process policy"] };
       }
       const inside = await git(["rev-parse", "--is-inside-work-tree"]);
       if (inside.code !== 0 || inside.stdout.trim() !== "true") {
@@ -173,40 +180,26 @@ export function createSystemProbe(repositoryRoot?: string, options: SystemProbeO
     },
 
     async runtimeAvailability(runtime) {
+      const policy = evaluateProcessPolicy({ role: "doctor.runtime_version_probe", hostEnv: process.env as Record<string, string | undefined> });
+      if (policy.decision !== "allow" || !policy.effectiveEnv) {
+        return { available: false };
+      }
       try {
         const { stdout } = await execFileAsync(runtime, ["--version"], {
           cwd: root,
           maxBuffer: 1024 * 1024,
-          // Without a timeout this call blocks indefinitely on a wedged binary, and
-          // a probe that hangs is indistinguishable from one that is merely slow.
-          // More importantly, an unbounded call makes the report machine-timing
-          // dependent: two runs of an unmodified doctor could disagree, which breaks
-          // the determinism `runDoctor` documents and its tests assert.
           timeout: RUNTIME_PROBE_TIMEOUT_MS,
+          env: policy.effectiveEnv,
         });
         const version = stdout.trim().split("\n")[0] ?? "";
         return version.length > 0 ? { available: true, version } : { available: true };
       } catch {
-        // A timeout, a non-zero exit, or a missing binary all mean the same thing
-        // here: this runtime is not usable. The reason is deliberately not
-        // distinguished — the operator's remedy is the same in every case.
         return { available: false };
       }
     },
 
     fileExists: (relativePath) => existsSync(resolve(root, relativePath)),
 
-    // Only runtimes whose invocation this file knows how to write are probed.
-    //
-    // A generic `<runtime> run <prompt>` was tried and is wrong: `herdr` is a
-    // terminal workspace manager with no `run` subcommand at all, and `hermes` takes
-    // its prompt as `-z`. Probing them that way reported two working runtimes as
-    // broken — a false *negative*, which is the mirror image of the false positive
-    // this whole change exists to remove, and no better.
-    //
-    // So a runtime with no known invocation is reported as unprobed, never as failed.
-    // Claiming a failure we did not establish is the same mistake in the other
-    // direction.
     ...(options.probeDispatch === true ? dispatchChecksFor(root, options.dispatchCommands) : {}),
   };
 }
@@ -235,29 +228,17 @@ function dispatchChecksFor(
     dispatchCheck: async (runtime) => {
       const args = commands[runtime];
       if (args === undefined) return { probed: false, ok: false, detail: "no probe defined for this runtime" };
-      // Through the repository's own subprocess runner, not `execFile`.
-      //
-      // This was `execFile` first, and it reported `opencode` as unable to run a
-      // prompt while the identical command finished in three seconds. `execFile`
-      // waits on pipes; a runtime agent that keeps a pipe open past its own exit
-      // never closes it, so the call sat until the 60s bound and was killed. The
-      // repository already learned this — a dispatch through a pipe hung to its
-      // ceiling while the same command on a file completed — and the fix is to
-      // redirect to a file, which is exactly what `defaultCommandRunner` does.
-      //
-      // Reusing it rather than reimplementing the redirection is the point: the
-      // lesson is encoded once, where the runtimes use it too.
+      const policy = evaluateProcessPolicy({ role: "doctor.runtime_dispatch_probe", hostEnv: process.env as Record<string, string | undefined> });
+      if (policy.decision !== "allow" || !policy.effectiveEnv) {
+        return { probed: false, ok: false, detail: `dispatch probe refused by process policy: ${policy.reasonCode}` };
+      }
       try {
-        // Resolving means it exited zero. `defaultCommandRunner` rejects on a
-        // non-zero exit, so success is the absence of the catch below.
         await defaultCommandRunner.run(runtime, [...args], root, {
           timeoutMs: DISPATCH_PROBE_TIMEOUT_MS,
+          env: policy.effectiveEnv,
         });
         return { probed: true, ok: true };
       } catch (error) {
-        // The runner reaps its process group on timeout, so this is a wedged or
-        // missing binary rather than a runtime that answered. Either way the probe
-        // did not succeed, and saying so is the whole point of running it.
         return { probed: true, ok: false, detail: error instanceof Error ? error.message.slice(0, 200) : "the probe could not complete" };
       }
     },
